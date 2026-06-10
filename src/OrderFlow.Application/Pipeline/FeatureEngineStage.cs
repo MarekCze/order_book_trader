@@ -16,14 +16,28 @@ public sealed class FeatureEngineStage : IBookEventObserver
     private readonly TickSize _tick;
     private readonly FeatureEngineOptions _options;
     private readonly ILoiProvider? _loiProvider;
+    private readonly INakedPocStore? _nakedPocStore;
+    private readonly IAtrHistoryStore? _atrHistoryStore;
     private readonly Dictionary<uint, FeatureEngine> _engines = new();
     private readonly Dictionary<uint, BookStateTracker> _trackers = new();
 
-    public FeatureEngineStage(TickSize tick, FeatureEngineOptions options, ILoiProvider? loiProvider = null)
+    /// <summary>
+    /// The persistence stores are shared by all instruments — fine for v1, which trades a
+    /// single continuous ES contract (and a registry that survives the roll is the point
+    /// of naked POCs). A multi-instrument bot needs per-instrument registries.
+    /// </summary>
+    public FeatureEngineStage(
+        TickSize tick,
+        FeatureEngineOptions options,
+        ILoiProvider? loiProvider = null,
+        INakedPocStore? nakedPocStore = null,
+        IAtrHistoryStore? atrHistoryStore = null)
     {
         _tick = tick;
         _options = options;
         _loiProvider = loiProvider;
+        _nakedPocStore = nakedPocStore;
+        _atrHistoryStore = atrHistoryStore;
     }
 
     public IReadOnlyDictionary<uint, FeatureEngine> Engines => _engines;
@@ -32,7 +46,7 @@ public sealed class FeatureEngineStage : IBookEventObserver
     {
         if (!_engines.TryGetValue(e.InstrumentId, out var engine))
         {
-            engine = new FeatureEngine(_tick, _options, _loiProvider);
+            engine = new FeatureEngine(_tick, _options, _loiProvider, _nakedPocStore, _atrHistoryStore);
             _engines.Add(e.InstrumentId, engine);
             _trackers.Add(e.InstrumentId, tracker);
         }

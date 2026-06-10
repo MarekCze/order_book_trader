@@ -3,6 +3,7 @@ using OrderFlow.Application.Pipeline;
 using OrderFlow.Domain.Primitives;
 using OrderFlow.Infrastructure.Config;
 using OrderFlow.Infrastructure.Dbn;
+using OrderFlow.Infrastructure.Storage;
 
 namespace OrderFlow.Backtest;
 
@@ -24,9 +25,15 @@ internal static class ReplayCommand
         var stats = new StatsCollector(tick);
         FeatureEngineStage? features = null;
         IBookEventObserver observer = stats;
-        if (CliArgs.HasFlag(rest, "--features"))
+        bool withFeatures = CliArgs.HasFlag(rest, "--features");
+        // Empty SqlitePath = ephemeral in-memory state, keeping repeated replays of the
+        // same file byte-identical.
+        using var store = withFeatures && !string.IsNullOrWhiteSpace(options.Storage.SqlitePath)
+            ? new SqliteFeatureStateStore(options.Storage.SqlitePath)
+            : null;
+        if (withFeatures)
         {
-            features = new FeatureEngineStage(tick, options.Features);
+            features = new FeatureEngineStage(tick, options.Features, nakedPocStore: store, atrHistoryStore: store);
             observer = new CompositeBookEventObserver(stats, features);
         }
 
