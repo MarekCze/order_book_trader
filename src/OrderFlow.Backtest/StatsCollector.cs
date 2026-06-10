@@ -6,9 +6,9 @@ using OrderFlow.Domain.Primitives;
 namespace OrderFlow.Backtest;
 
 /// <summary>
-/// Replay sanity statistics: event counts by kind, per-instrument session high/low and
-/// volume (from 'T' trade summaries only — fills would double-count), and the min/max
-/// spread observed while the book was two-sided.
+/// Replay sanity statistics: event counts by kind, per-instrument session high/low,
+/// trade count and traded volume split by aggressor side (trades arrive inline in
+/// MBP-10), and the min/max spread observed while the book was two-sided.
 /// </summary>
 public sealed class StatsCollector : IBookEventObserver
 {
@@ -16,6 +16,8 @@ public sealed class StatsCollector : IBookEventObserver
     {
         public long TradeCount;
         public long Volume;
+        public long BuyVolume;   // aggressor = Bid (buyer lifted the offer)
+        public long SellVolume;  // aggressor = Ask (seller hit the bid)
         public Price High = Price.Undefined;
         public Price Low = Price.Undefined;
         public long MinSpreadTicks = long.MaxValue;
@@ -24,7 +26,7 @@ public sealed class StatsCollector : IBookEventObserver
     }
 
     private readonly TickSize _tick;
-    private readonly long[] _kindCounts = new long[8];
+    private readonly long[] _kindCounts = new long[5];
     private readonly Dictionary<uint, InstrumentStats> _instruments = new();
 
     public StatsCollector(TickSize tick)
@@ -34,7 +36,7 @@ public sealed class StatsCollector : IBookEventObserver
 
     public long TotalEvents { get; private set; }
 
-    public void OnEventApplied(in MarketEvent e, OrderBook book)
+    public void OnEventApplied(in MarketEvent e, BookStateTracker tracker)
     {
         TotalEvents++;
         _kindCounts[(int)e.Kind]++;
@@ -49,6 +51,14 @@ public sealed class StatsCollector : IBookEventObserver
         {
             s.TradeCount++;
             s.Volume += e.Size;
+            if (e.Side == Side.Bid)
+            {
+                s.BuyVolume += e.Size;
+            }
+            else if (e.Side == Side.Ask)
+            {
+                s.SellVolume += e.Size;
+            }
             if (s.High.IsUndefined || e.Price > s.High)
             {
                 s.High = e.Price;
@@ -59,7 +69,7 @@ public sealed class StatsCollector : IBookEventObserver
             }
         }
 
-        if (book.TryGetSpreadTicks(_tick, out long spread))
+        if (tracker.TryGetSpreadTicks(_tick, out long spread))
         {
             s.TwoSidedSamples++;
             if (spread < s.MinSpreadTicks)
@@ -73,7 +83,7 @@ public sealed class StatsCollector : IBookEventObserver
         }
     }
 
-    public void Print(TextWriter w, BookBuilderStage stage)
+    public void Print(TextWriter w, BookStateTrackerStage stage)
     {
         w.WriteLine("Event counts by kind:");
         for (int i = 0; i < _kindCounts.Length; i++)
@@ -90,6 +100,8 @@ public sealed class StatsCollector : IBookEventObserver
             w.WriteLine($"Instrument {instrumentId}:");
             w.WriteLine($"  trades          {s.TradeCount,15:N0}");
             w.WriteLine($"  volume          {s.Volume,15:N0}");
+            w.WriteLine($"  buy volume      {s.BuyVolume,15:N0}  (aggressor bought)");
+            w.WriteLine($"  sell volume     {s.SellVolume,15:N0}  (aggressor sold)");
             w.WriteLine($"  session high    {(s.High.IsUndefined ? "n/a" : s.High.ToString()),15}");
             w.WriteLine($"  session low     {(s.Low.IsUndefined ? "n/a" : s.Low.ToString()),15}");
             if (s.TwoSidedSamples > 0)
@@ -101,19 +113,14 @@ public sealed class StatsCollector : IBookEventObserver
                 w.WriteLine("  spread          book never two-sided");
             }
 
-            var book = stage.Books[instrumentId];
+            var tracker = stage.Trackers[instrumentId];
             w.Write("  final book      ");
-            w.Write($"{book.OrderCount:N0} orders, {book.LevelCount(Side.Bid):N0} bid / {book.LevelCount(Side.Ask):N0} ask levels");
-            if (book.TryGetBest(Side.Bid, out var bb) && book.TryGetBest(Side.Ask, out var ba))
+            w.Write($"{tracker.LevelCount(Side.Bid):N0} bid / {tracker.LevelCount(Side.Ask):N0} ask levels");
+            if (tracker.TryGetBest(Side.Bid, out var bb) && tracker.TryGetBest(Side.Ask, out var ba))
             {
                 w.Write($", BBO {bb.Price} x {ba.Price}");
             }
             w.WriteLine();
-            if (book.Anomalies.Total > 0)
-            {
-                w.WriteLine($"  anomalies       dupAdd={book.Anomalies.DuplicateAdd:N0} cxlUnknown={book.Anomalies.CancelUnknownOrder:N0} " +
-                            $"fillUnknown={book.Anomalies.FillUnknownOrder:N0} modUnknown={book.Anomalies.ModifyUnknownOrder:N0} sideMismatch={book.Anomalies.SideMismatch:N0}");
-            }
         }
     }
 }

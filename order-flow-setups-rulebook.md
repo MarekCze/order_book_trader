@@ -14,6 +14,12 @@
 - Levels of interest (LOI) = pre-marked prices: prior day high/low, overnight high/low, prior POC, naked POCs, VAH/VAL, session LVNs, round numbers
 - All thresholds below are **starting parameters for ES**, to be recalibrated per instrument and regime. They are deliberately explicit so they can be coded, tested, and falsified — not because the specific numbers are sacred.
 
+### v1 data constraint (MBP-10)
+
+- v1 runs on the Databento **MBP-10** schema; trades with aggressor side are included inline (action `T` records).
+- **Setup 3 is out of scope for v1** (requires MBO); all conditions referencing individual order tracking (C1, C3) are deferred.
+- Features **F7, F19, F20 are recorded as null in v1**; **F16** uses a trade-vs-cancel attribution heuristic (a displayed-size decrease is classified as traded if a matching trade record printed at that price in the same window, cancelled otherwise); everything else in Parts 1 and 2 is computable from MBP-10 as written.
+
 ---
 
 ## Global filters (apply to every setup)
@@ -100,7 +106,7 @@
 
 ---
 
-## Setup 3 — Iceberg follow
+## Setup 3 — Iceberg follow *(requires MBO — deferred in v1)*
 
 **Thesis:** A reloading hidden order reveals a committed large participant; trade their side using their level as the risk anchor.
 
@@ -213,7 +219,7 @@ Either way, **features must be stationary**: use ratios, z-scores against rollin
 | F4 | `bbo_size_ratio` | displayed(bid₁)/displayed(ask₁), log-transformed | imbalance |
 | F5 | `depth_z` | z-score of total top-5 depth vs. trailing 30-min distribution | regime |
 | F6 | `level_dist_signed` | signed distance to nearest LOI in ticks, plus one-hot of LOI type (PDH, ONL, nPOC, LVN, …) | Global filter 2, A1, B1, C2, D1, E3 |
-| F7 | `queue_position_est` | own-order queue ahead estimate (MBO) — for execution model only | queue logic |
+| F7 | `queue_position_est` | own-order queue ahead estimate (MBO) — for execution model only *(requires MBO — deferred in v1, journaled as null)* | queue logic |
 
 ## 2.2 Flow features (rolling windows w ∈ {10s, 30s, 60s, 300s})
 
@@ -235,8 +241,8 @@ Either way, **features must be stationary**: use ratios, z-scores against rollin
 | F16 | `pull_ratio_side_w` | cancel volume ÷ add volume per side over w | D2 (pulling), A-invalidation |
 | F17 | `replenish_ratio_p` | traded(P) ÷ max(displayed(P)) at the defended price | A5, C1 (iceberg core) |
 | F18 | `refresh_count_p` | number of refresh events at P within 3 min | A5, C1 |
-| F19 | `refresh_latency_ms` | median ms between depletion and refresh at P | C1 |
-| F20 | `refresh_size_cv` | coefficient of variation of refresh sizes at P | C3 (algo signature) |
+| F19 | `refresh_latency_ms` | median ms between depletion and refresh at P *(requires MBO — deferred in v1, journaled as null)* | C1 |
+| F20 | `refresh_size_cv` | coefficient of variation of refresh sizes at P *(requires MBO — deferred in v1, journaled as null)* | C3 (algo signature) |
 | F21 | `depth_change_dir_w` | %Δ in displayed size, 3 levels beyond the active extreme | B5 (stacking vs. pulling) |
 | F22 | `vanish_flag` | 1 if defended-level displayed size dropped >80% without trading | absorption invalidation |
 

@@ -19,8 +19,9 @@ public sealed record DbnMetadata(
     IReadOnlyList<string> NotFoundSymbols,
     int MappingCount)
 {
-    public const ushort SchemaMbo = 0;
+    // Schema ids per databento/dbn rust/dbn/src/enums.rs: Mbo = 0, Mbp1 = 1, Mbp10 = 2.
+    public const ushort SchemaMbp10 = 2;
     public const ushort SchemaMixed = 0xFFFF;
 
-    public bool IsMboSchema => RawSchema == SchemaMbo;
+    public bool IsMbp10Schema => RawSchema == SchemaMbp10;
 }

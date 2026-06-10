@@ -4,8 +4,8 @@ using OrderFlow.Domain.Events;
 namespace OrderFlow.Application.Pipeline;
 
 /// <summary>
-/// Wires source → channel → book builder. This is the pipeline spine; later milestones
-/// hang the feature engine, detectors and execution off <see cref="IBookEventObserver"/>.
+/// Wires source → channel → book state tracker. This is the pipeline spine; later
+/// milestones hang the feature engine, detectors and execution off <see cref="IBookEventObserver"/>.
 /// </summary>
 public static class ReplayPipeline
 {
@@ -13,7 +13,7 @@ public static class ReplayPipeline
 
     public static async Task RunAsync(
         IMarketEventSource source,
-        BookBuilderStage bookBuilder,
+        BookStateTrackerStage trackerStage,
         IBookEventObserver observer,
         int channelCapacity = DefaultChannelCapacity,
         CancellationToken cancellationToken = default)
@@ -25,7 +25,7 @@ public static class ReplayPipeline
             FullMode = BoundedChannelFullMode.Wait,
         });
 
-        var consumer = bookBuilder.RunAsync(channel.Reader, observer, cancellationToken);
+        var consumer = trackerStage.RunAsync(channel.Reader, observer, cancellationToken);
         await source.PumpAsync(channel.Writer, cancellationToken).ConfigureAwait(false);
         await consumer.ConfigureAwait(false);
     }

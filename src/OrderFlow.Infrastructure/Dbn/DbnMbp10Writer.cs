@@ -19,22 +19,25 @@ public sealed record DbnWriterOptions
 }
 
 /// <summary>
-/// Minimal DBN v2/v3 writer for the mbo schema. Exists for tests (decoder round-trips)
+/// Minimal DBN v2/v3 writer for the mbp-10 schema. Exists for tests (decoder round-trips)
 /// and the synthetic-data CLI command — NOT a general-purpose encoder.
 /// Layout mirrors <see cref="DbnDecoder"/>; see the references cited there.
 /// </summary>
-public sealed class DbnMboWriter : IDisposable
+public sealed class DbnMbp10Writer : IDisposable
 {
-    private const int MboRecordSize = 56;
+    private const int LevelSize = 32;
+    private const int LevelsOffset = 48;
+    private const int Mbp10RecordSize = LevelsOffset + BookLevels.Depth * LevelSize; // 368
     private const ushort SymbolCstrLenV2 = 71;
-    private const ushort SchemaMbo = 0;
+    private const ushort SchemaMbp10 = DbnMetadata.SchemaMbp10;
 
     private readonly Stream _out;
     private readonly bool _leaveOpen;
     private readonly bool _tsOut;
-    private readonly byte[] _rec = new byte[MboRecordSize + 8];
+    private readonly ushort _publisherId;
+    private readonly byte[] _rec = new byte[Mbp10RecordSize + 8];
 
-    public DbnMboWriter(Stream destination, DbnWriterOptions? options = null, bool leaveOpen = false)
+    public DbnMbp10Writer(Stream destination, DbnWriterOptions? options = null, bool leaveOpen = false)
     {
         options ??= new DbnWriterOptions();
         if (options.Version is not (2 or 3))
@@ -50,16 +53,17 @@ public sealed class DbnMboWriter : IDisposable
         WriteHeaderAndMetadata(options);
     }
 
-    private readonly ushort _publisherId;
-
     public void WriteEvent(in MarketEvent e)
     {
         byte action = e.Kind switch
         {
-            MarketEventKind.AddOrder => (byte)'A',
-            MarketEventKind.ModifyOrder => (byte)'M',
-            MarketEventKind.CancelOrder => (byte)'C',
-            MarketEventKind.Fill => (byte)'F',
+            MarketEventKind.BookChanged => e.Cause switch
+            {
+                BookCause.Add => (byte)'A',
+                BookCause.Cancel => (byte)'C',
+                BookCause.Modify => (byte)'M',
+                _ => 0,
+            },
             MarketEventKind.Trade => (byte)'T',
             MarketEventKind.BookClear => (byte)'R',
             _ => 0, // None / SnapshotEnd are not wire records
@@ -69,25 +73,35 @@ public sealed class DbnMboWriter : IDisposable
             return;
         }
         var r = _rec.AsSpan();
-        int totalLen = MboRecordSize + (_tsOut ? 8 : 0);
+        int totalLen = Mbp10RecordSize + (_tsOut ? 8 : 0);
         r[0] = (byte)(totalLen / 4);
-        r[1] = DbnDecoder.RTypeMbo;
+        r[1] = DbnDecoder.RTypeMbp10;
         BinaryPrimitives.WriteUInt16LittleEndian(r[2..], _publisherId);
         BinaryPrimitives.WriteUInt32LittleEndian(r[4..], e.InstrumentId);
         BinaryPrimitives.WriteUInt64LittleEndian(r[8..], e.TsEvent.UnixNanos);
-        BinaryPrimitives.WriteUInt64LittleEndian(r[16..], e.OrderId);
-        BinaryPrimitives.WriteInt64LittleEndian(r[24..], e.Price.RawNano);
-        BinaryPrimitives.WriteUInt32LittleEndian(r[32..], e.Size);
-        r[36] = (byte)e.Flags;
-        r[37] = 0; // channel_id
-        r[38] = action;
-        r[39] = e.Side switch { Domain.Primitives.Side.Bid => (byte)'B', Domain.Primitives.Side.Ask => (byte)'A', _ => (byte)'N' };
-        BinaryPrimitives.WriteUInt64LittleEndian(r[40..], e.TsRecv.UnixNanos);
-        BinaryPrimitives.WriteInt32LittleEndian(r[48..], 0); // ts_in_delta
-        BinaryPrimitives.WriteUInt32LittleEndian(r[52..], e.Sequence);
+        BinaryPrimitives.WriteInt64LittleEndian(r[16..], e.Price.RawNano);
+        BinaryPrimitives.WriteUInt32LittleEndian(r[24..], e.Size);
+        r[28] = action;
+        r[29] = e.Side switch { Domain.Primitives.Side.Bid => (byte)'B', Domain.Primitives.Side.Ask => (byte)'A', _ => (byte)'N' };
+        r[30] = (byte)e.Flags;
+        r[31] = e.Depth;
+        BinaryPrimitives.WriteUInt64LittleEndian(r[32..], e.TsRecv.UnixNanos);
+        BinaryPrimitives.WriteInt32LittleEndian(r[40..], 0); // ts_in_delta
+        BinaryPrimitives.WriteUInt32LittleEndian(r[44..], e.Sequence);
+        for (int i = 0; i < BookLevels.Depth; i++)
+        {
+            var l = r.Slice(LevelsOffset + i * LevelSize, LevelSize);
+            var lvl = e.Levels[i];
+            BinaryPrimitives.WriteInt64LittleEndian(l, lvl.BidPrice.RawNano);
+            BinaryPrimitives.WriteInt64LittleEndian(l[8..], lvl.AskPrice.RawNano);
+            BinaryPrimitives.WriteUInt32LittleEndian(l[16..], lvl.BidSize);
+            BinaryPrimitives.WriteUInt32LittleEndian(l[20..], lvl.AskSize);
+            BinaryPrimitives.WriteUInt32LittleEndian(l[24..], lvl.BidCount);
+            BinaryPrimitives.WriteUInt32LittleEndian(l[28..], lvl.AskCount);
+        }
         if (_tsOut)
         {
-            BinaryPrimitives.WriteUInt64LittleEndian(r[56..], e.TsRecv.UnixNanos);
+            BinaryPrimitives.WriteUInt64LittleEndian(r[Mbp10RecordSize..], e.TsRecv.UnixNanos);
         }
         _out.Write(_rec, 0, totalLen);
     }
@@ -115,7 +129,7 @@ public sealed class DbnMboWriter : IDisposable
 
         var m = b[8..];
         WriteCString(m, 0, o.Dataset, 16);
-        BinaryPrimitives.WriteUInt16LittleEndian(m[16..], SchemaMbo);
+        BinaryPrimitives.WriteUInt16LittleEndian(m[16..], SchemaMbp10);
         BinaryPrimitives.WriteUInt64LittleEndian(m[18..], o.StartNs);
         BinaryPrimitives.WriteUInt64LittleEndian(m[26..], o.EndNs);
         BinaryPrimitives.WriteUInt64LittleEndian(m[34..], 0); // limit

@@ -1,36 +1,38 @@
+using System.Runtime.CompilerServices;
 using OrderFlow.Domain.Primitives;
 
 namespace OrderFlow.Domain.Events;
 
 /// <summary>
-/// Normalized market event kind. Maps DBN MBO action chars
-/// ('A' Add, 'M' Modify, 'C' Cancel, 'F' Fill, 'T' Trade, 'R' cleaR) plus a synthesized
-/// <see cref="SnapshotEnd"/> emitted when the initial book snapshot completes.
+/// Normalized market event kinds derived from MBP-10 records.
+/// DBN action chars map as: 'A'/'C'/'M' → <see cref="BookChanged"/> (with the cause
+/// preserved in <see cref="BookCause"/>), 'T' → <see cref="Trade"/>, 'R' → <see cref="BookClear"/>.
 /// </summary>
 public enum MarketEventKind : byte
 {
     None = 0,
 
-    /// <summary>New resting order ('A').</summary>
-    AddOrder = 1,
+    /// <summary>Top-10 book state changed; Price/Size/Side/Depth describe the causing update.</summary>
+    BookChanged = 1,
 
-    /// <summary>Order changed price and/or size; Price/Size carry the NEW absolute values ('M').</summary>
-    ModifyOrder = 2,
+    /// <summary>Inline trade; Price/Size are the execution, Side is the AGGRESSOR side.
+    /// Levels carry the book state immediately after the trade.</summary>
+    Trade = 2,
 
-    /// <summary>Order cancelled; Size is the quantity removed ('C').</summary>
-    CancelOrder = 3,
-
-    /// <summary>Execution against a resting order; Size is the filled quantity ('F').</summary>
-    Fill = 4,
-
-    /// <summary>Aggressor trade summary; does NOT mutate the book — fills do ('T').</summary>
-    Trade = 5,
-
-    /// <summary>Clear/reset the entire book ('R').</summary>
-    BookClear = 6,
+    /// <summary>Clear/reset the book ('R', stream boundaries).</summary>
+    BookClear = 3,
 
     /// <summary>Synthesized: the snapshot-flagged record run at stream start has ended. Not a DBN record.</summary>
-    SnapshotEnd = 7,
+    SnapshotEnd = 4,
+}
+
+/// <summary>The order-book action that caused a <see cref="MarketEventKind.BookChanged"/> event.</summary>
+public enum BookCause : byte
+{
+    None = 0,
+    Add = 1,    // 'A'
+    Cancel = 2, // 'C'
+    Modify = 3, // 'M'
 }
 
 /// <summary>
@@ -51,20 +53,94 @@ public enum MarketEventFlags : byte
 }
 
 /// <summary>
-/// Single normalized market event. A readonly record struct (not a class hierarchy) so the
-/// hot path — tens of millions of events per session — allocates nothing per event.
+/// One price level of the MBP-10 state, mirroring the DBN BidAskPair struct
+/// (bid_px i64, ask_px i64, bid_sz u32, ask_sz u32, bid_ct u32, ask_ct u32).
+/// Unpopulated slots carry <see cref="Price.Undefined"/> prices and zero size/count.
+/// </summary>
+public readonly record struct BidAskLevel(
+    Price BidPrice,
+    Price AskPrice,
+    uint BidSize,
+    uint AskSize,
+    uint BidCount,
+    uint AskCount)
+{
+    public static readonly BidAskLevel Empty = new(Price.Undefined, Price.Undefined, 0, 0, 0, 0);
+
+    public bool HasBid => !BidPrice.IsUndefined && BidSize > 0;
+
+    public bool HasAsk => !AskPrice.IsUndefined && AskSize > 0;
+}
+
+/// <summary>
+/// Fixed 10-level book state as carried by every MBP-10 record. An inline array keeps the
+/// whole snapshot a flat value type — no per-event heap allocation through the pipeline.
+/// Equality is element-wise (used by tests to assert byte-for-byte state propagation).
+/// </summary>
+[InlineArray(Depth)]
+public struct BookLevels : IEquatable<BookLevels>
+{
+    public const int Depth = 10;
+
+    private BidAskLevel _element0;
+
+    public static BookLevels CreateEmpty()
+    {
+        var levels = new BookLevels();
+        for (int i = 0; i < Depth; i++)
+        {
+            levels[i] = BidAskLevel.Empty;
+        }
+        return levels;
+    }
+
+    public readonly bool Equals(BookLevels other)
+    {
+        for (int i = 0; i < Depth; i++)
+        {
+            if (this[i] != other[i])
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public override readonly bool Equals(object? obj) => obj is BookLevels other && Equals(other);
+
+    public override readonly int GetHashCode()
+    {
+        var hash = new HashCode();
+        for (int i = 0; i < Depth; i++)
+        {
+            hash.Add(this[i]);
+        }
+        return hash.ToHashCode();
+    }
+
+    public static bool operator ==(BookLevels left, BookLevels right) => left.Equals(right);
+
+    public static bool operator !=(BookLevels left, BookLevels right) => !left.Equals(right);
+}
+
+/// <summary>
+/// Single normalized market event derived from one MBP-10 record: the causing update
+/// (Price/Size/Side/Cause/Depth) plus the resulting top-10 book state (Levels).
+/// A readonly record struct so the hot path allocates nothing per event.
 /// </summary>
 public readonly record struct MarketEvent(
     MarketEventKind Kind,
+    BookCause Cause,
     uint InstrumentId,
     Timestamp TsEvent,
     Timestamp TsRecv,
     uint Sequence,
-    ulong OrderId,
     Price Price,
     uint Size,
     Side Side,
-    MarketEventFlags Flags)
+    MarketEventFlags Flags,
+    byte Depth,
+    BookLevels Levels)
 {
     public bool IsSnapshot => (Flags & MarketEventFlags.Snapshot) != 0;
 }

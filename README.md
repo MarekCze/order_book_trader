@@ -1,7 +1,8 @@
 # Order Flow Trading Bot
 
-Rule-based automated futures trading bot for CME ES, reconstructing the limit order book
-from Databento MBO data and running deterministic order-flow setup detectors against it.
+Rule-based automated futures trading bot for CME ES, tracking top-10 limit order book
+depth from Databento MBP-10 data and running deterministic order-flow setup detectors
+against it.
 
 - Product spec: [`order-flow-setups-rulebook.md`](order-flow-setups-rulebook.md)
 - Architecture & roadmap: [`CLAUDE.md`](CLAUDE.md)
@@ -16,7 +17,7 @@ dotnet test
 ## CLI
 
 ```bash
-# Replay a Databento DBN mbo file (zstd or raw) and print sanity statistics
+# Replay a Databento DBN mbp-10 file (zstd or raw) and print sanity statistics
 dotnet run --project src/OrderFlow.Backtest -- replay data/es-session.dbn.zst --stats
 
 # Generate a deterministic synthetic MBO file (for benchmarks / smoke tests)
@@ -27,8 +28,8 @@ dotnet run --project src/OrderFlow.Backtest -- synth /tmp/synth.dbn.zst --events
 
 | Project | Role |
 |---|---|
-| `OrderFlow.Domain` | Pure logic, zero dependencies: primitives, market events, order book |
-| `OrderFlow.Application` | Pipeline orchestration (Channels), book builder stage |
+| `OrderFlow.Domain` | Pure logic, zero dependencies: primitives, market events, book state tracker |
+| `OrderFlow.Application` | Pipeline orchestration (Channels), book state tracker stage |
 | `OrderFlow.Infrastructure` | DBN decoder/writer, config |
 | `OrderFlow.Backtest` | CLI host (`orderflow`), stats, synthetic data generator |
 | `OrderFlow.Tests` | xUnit: golden book tests, property tests, codec round-trips |

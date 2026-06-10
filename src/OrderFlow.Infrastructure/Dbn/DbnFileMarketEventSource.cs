@@ -18,7 +18,7 @@ public sealed class DbnFileMarketEventSource : IMarketEventSource
 
     public long EventsRead { get; private set; }
 
-    public long IgnoredMboActionCount { get; private set; }
+    public long IgnoredActionCount { get; private set; }
 
     public IReadOnlyList<long> SkippedByRtype { get; private set; } = Array.Empty<long>();
 
@@ -38,7 +38,7 @@ public sealed class DbnFileMarketEventSource : IMarketEventSource
                 EventsRead++;
             }
             SkippedByRtype = decoder.SkippedByRtype.ToArray();
-            IgnoredMboActionCount = decoder.IgnoredMboActionCount;
+            IgnoredActionCount = decoder.IgnoredActionCount;
             writer.Complete();
         }
         catch (Exception ex)
