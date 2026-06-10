@@ -1,0 +1,12 @@
+# .NET build outputs
+bin/
+obj/
+TestResults/
+*.user
+.vs/
+.idea/
+
+# Local market data and generated artifacts — never commit data files
+data/
+*.dbn
+*.dbn.zst
