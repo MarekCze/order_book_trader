@@ -55,9 +55,12 @@ Options:
 
 - `--tick-size 0.25` — override the instrument tick size (defaults to ES = 0.25 from
   `src/OrderFlow.Backtest/appsettings.json`).
-- `--features` — also run the M2 feature engine (F1–F15) over the replay and print each
-  instrument's final feature snapshot. Thresholds and windows come from the `Features`
-  section of `appsettings.json`.
+- `--features` — also run the feature engine (F1–F36; F7/F19/F20 are MBO-only and stay
+  null) over the replay and print each instrument's final feature snapshot. Thresholds
+  and windows come from the `Features` section of `appsettings.json`. Cross-session
+  state (naked POCs, ATR history) is in-memory by default; set `Storage:SqlitePath` to
+  persist it when replaying consecutive sessions in order — note a persistent db makes
+  repeated replays of the same file non-identical by design.
 
 Expected output shape:
 

@@ -12,6 +12,7 @@ public sealed class AppOptions
     public InstrumentOptions Instrument { get; set; } = new();
     public PipelineOptions Pipeline { get; set; } = new();
     public FeatureEngineOptions Features { get; set; } = new();
+    public StorageOptions Storage { get; set; } = new();
 
     public static AppOptions Load(string? basePath = null)
     {
@@ -44,4 +45,15 @@ public sealed class InstrumentOptions
 public sealed class PipelineOptions
 {
     public int ChannelCapacity { get; set; } = 65536;
+}
+
+public sealed class StorageOptions
+{
+    /// <summary>
+    /// SQLite file for cross-session feature state (naked POCs, ATR history). Empty =
+    /// ephemeral in-memory stores, which keeps repeated replays of the same file
+    /// byte-identical (a persistent db mutates between runs). Set a path when replaying
+    /// consecutive sessions in sequence.
+    /// </summary>
+    public string SqlitePath { get; set; } = string.Empty;
 }

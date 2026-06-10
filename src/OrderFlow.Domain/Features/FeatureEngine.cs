@@ -1,3 +1,4 @@
+using System.Globalization;
 using OrderFlow.Domain.Book;
 using OrderFlow.Domain.Events;
 using OrderFlow.Domain.Primitives;
@@ -6,11 +7,12 @@ using OrderFlow.Domain.Sessions;
 namespace OrderFlow.Domain.Features;
 
 /// <summary>
-/// Per-instrument M2 feature engine: ingests every applied market event (O(1),
-/// allocation-free in steady state) and computes an F1–F15 <see cref="FeatureSnapshot"/>
-/// on demand. Sessions follow the Globex trading day (rolls 18:00 ET); session
-/// distributions then re-seed from the finished session per CLAUDE.md. Events inside
-/// the 17:00–18:00 ET maintenance/pre-open window are never ingested — books there are
+/// Per-instrument feature engine: ingests every applied market event (O(1),
+/// allocation-light) and computes an F1–F36 <see cref="FeatureSnapshot"/> on demand.
+/// Sessions follow the Globex trading day (rolls 18:00 ET); session distributions then
+/// re-seed from the finished session per CLAUDE.md, the finished session's POC enters
+/// the naked-POC registry, and its H/L + POC/VAH/VAL become LOIs. Events inside the
+/// 17:00–18:00 ET maintenance/pre-open window are never ingested — books there are
 /// legitimately crossed and would poison spread/imbalance state.
 ///
 /// MBP-10 approximations (documented per CLAUDE.md):
@@ -22,8 +24,12 @@ namespace OrderFlow.Domain.Features;
 ///    aggressor side across ≥ SweepMinLevels distinct prices.
 ///  - F14: "current stall" is proxied by a trailing lookback of completed aligned
 ///    10-second buckets: peak bucket volume ÷ latest completed bucket volume (floor 1).
-///  - F8/F10 session distributions are sampled once per active second, not per event,
-///    so the 200-sample gate means ~3.5 minutes of active market, not 3 milliseconds.
+///  - F8/F10 session distributions are sampled once per active second, not per event.
+///  - F16–F18/F21/F22 derive from book-state diffs (see LiquidityDynamicsTracker).
+///  - F23–F29 read the FORMING volume bar (leakage rule 2.8.2); F25's percentile ranks
+///    against completed bars of the session.
+///  - F31: a naked POC is filled when a trade prints at it or the trade-to-trade price
+///    path crosses it (gaps between prints still fill).
 /// </summary>
 public sealed class FeatureEngine
 {
@@ -41,13 +47,35 @@ public sealed class FeatureEngine
     private SessionDistribution[] _intensityDist;
     private SessionDistribution _sizeDist;
 
+    // M3 components
+    private readonly LiquidityDynamicsTracker _liquidity;
+    private readonly INakedPocStore _nakedPocs;
+    private readonly AtrTracker _atr;
+    private readonly SessionLevelsLoiProvider _sessionLevels = new();
+    private readonly Timestamp[] _newsTimes;
+    private VolumeBarBuilder _bars;
+    private SessionProfile _profile;
+    private SessionDistribution _barDeltaDist;
+
     private DateOnly? _sessionDate;
     private Timestamp _lastTs;
     private long _cumDelta;
     private Price _lastTradePrice = Price.Undefined;
 
+    // session level state
+    private Price _sessionHigh = Price.Undefined;
+    private Price _sessionLow = Price.Undefined;
+    private Price _overnightHigh = Price.Undefined;
+    private Price _overnightLow = Price.Undefined;
+    private bool _rthStarted;
+    private Price _priorDayHigh = Price.Undefined;
+    private Price _priorDayLow = Price.Undefined;
+    private Price _priorPoc = Price.Undefined;
+    private Price _priorVah = Price.Undefined;
+    private Price _priorVal = Price.Undefined;
+
     // F9 swing state
-    private int _extremeDirection; // 0 none, +1 high, −1 low
+    private int _extremeDirection;
     private long _cumDeltaAtExtreme;
 
     // F11 run state
@@ -61,11 +89,33 @@ public sealed class FeatureEngine
     private int _groupPriceCount;
     private bool _groupCounted;
 
-    public FeatureEngine(TickSize tick, FeatureEngineOptions options, ILoiProvider? loiProvider = null)
+    public FeatureEngine(
+        TickSize tick,
+        FeatureEngineOptions options,
+        ILoiProvider? loiOverride = null,
+        INakedPocStore? nakedPocStore = null,
+        IAtrHistoryStore? atrHistoryStore = null)
     {
         _tick = tick;
         _opts = options;
-        _loi = loiProvider ?? new RoundNumberLoiProvider(options.RoundNumberIntervalPoints);
+        _nakedPocs = nakedPocStore ?? new InMemoryNakedPocStore();
+        _atr = new AtrTracker(options, atrHistoryStore ?? new InMemoryAtrHistoryStore());
+        _profile = new SessionProfile(tick, options);
+        _bars = new VolumeBarBuilder(tick, options);
+        _barDeltaDist = new SessionDistribution(
+            -2L * options.BarVolumeSize, 2L * options.BarVolumeSize, options.MinBarSamples);
+        // Tie priority: session structure first, then naked POCs, LVNs, round numbers.
+        _loi = loiOverride ?? new CompositeLoiProvider(
+            _sessionLevels,
+            new NakedPocLoiProvider(_nakedPocs),
+            new LvnLoiProvider(() => _profile),
+            new RoundNumberLoiProvider(options.RoundNumberIntervalPoints));
+        _newsTimes = options.NewsTimesUtc
+            .Select(s => Timestamp.FromDateTimeOffset(DateTimeOffset.Parse(
+                s, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal)))
+            .ToArray();
+
+        _liquidity = new LiquidityDynamicsTracker(tick, options);
         _ring = new FlowWindowRing(options.FlowWindowsSeconds);
         _depthStats = new RollingStats(options.DepthZWindowSeconds);
         _swingMax = new MonotonicWindowExtreme(options.SwingWindowSeconds, trackMax: true);
@@ -88,6 +138,11 @@ public sealed class FeatureEngine
     public void OnEvent(in MarketEvent e, BookStateTracker tracker)
     {
         _lastTs = e.TsEvent;
+        if (e.Kind == MarketEventKind.BookClear)
+        {
+            _liquidity.Reset();
+            return;
+        }
         if (e.Kind is not (MarketEventKind.BookChanged or MarketEventKind.Trade))
         {
             return;
@@ -98,11 +153,18 @@ public sealed class FeatureEngine
         }
 
         RolloverIfNewSession(e.TsEvent);
+        if (!_rthStarted && CmeSessions.IsRth(e.TsEvent))
+        {
+            _rthStarted = true; // overnight H/L freeze here and become LOIs
+            RefreshSessionLevels();
+        }
+
         SampleDistributionsAndAdvance(e.TsEvent);
         _stallVolume.Advance(e.TsEvent);
         _baselineVolume.Advance(e.TsEvent);
         _swingMax.Advance(e.TsEvent);
         _swingMin.Advance(e.TsEvent);
+        _liquidity.OnEvent(in e, tracker);
 
         if (tracker.HasState)
         {
@@ -190,14 +252,12 @@ public sealed class FeatureEngine
 
         // F9: new extreme = print strictly beyond the rolling 30-minute high/low.
         long priceRaw = e.Price.RawNano;
-        long? maxBefore = _swingMax.Extreme;
-        long? minBefore = _swingMin.Extreme;
-        if (maxBefore is { } hi && priceRaw > hi)
+        if (_swingMax.Extreme is { } hi && priceRaw > hi)
         {
             _extremeDirection = 1;
             _cumDeltaAtExtreme = _cumDelta;
         }
-        else if (minBefore is { } lo && priceRaw < lo)
+        else if (_swingMin.Extreme is { } lo && priceRaw < lo)
         {
             _extremeDirection = -1;
             _cumDeltaAtExtreme = _cumDelta;
@@ -207,7 +267,70 @@ public sealed class FeatureEngine
 
         _stallVolume.Add(e.TsEvent, e.Price, size);
         _baselineVolume.Add(e.TsEvent, e.Price, size);
+
+        // ----- M3 per-trade state -----
+        _profile.AddTrade(e.Price, size);
+        if (_bars.OnTrade(e.Price, e.Size, e.Side) is { } completedBar)
+        {
+            _barDeltaDist.Add(completedBar.Delta);
+        }
+        if (_sessionDate is { } session)
+        {
+            _atr.OnTrade(e.TsEvent, e.Price, session);
+        }
+        if (_sessionHigh.IsUndefined || e.Price > _sessionHigh)
+        {
+            _sessionHigh = e.Price;
+        }
+        if (_sessionLow.IsUndefined || e.Price < _sessionLow)
+        {
+            _sessionLow = e.Price;
+        }
+        if (!_rthStarted)
+        {
+            if (_overnightHigh.IsUndefined || e.Price > _overnightHigh)
+            {
+                _overnightHigh = e.Price;
+            }
+            if (_overnightLow.IsUndefined || e.Price < _overnightLow)
+            {
+                _overnightLow = e.Price;
+            }
+        }
+        FillCrossedNakedPocs(e.Price);
+
         _lastTradePrice = e.Price;
+    }
+
+    /// <summary>F31 fills: any naked POC on the closed price interval between the previous
+    /// and current trade prices has been revisited.</summary>
+    private void FillCrossedNakedPocs(Price tradePrice)
+    {
+        var active = _nakedPocs.Active();
+        if (active.Count == 0)
+        {
+            return;
+        }
+        long lo = tradePrice.RawNano;
+        long hi = tradePrice.RawNano;
+        if (!_lastTradePrice.IsUndefined)
+        {
+            lo = Math.Min(lo, _lastTradePrice.RawNano);
+            hi = Math.Max(hi, _lastTradePrice.RawNano);
+        }
+        Span<long> filled = stackalloc long[active.Count < 32 ? active.Count : 32];
+        int filledCount = 0;
+        foreach (var poc in active)
+        {
+            if (poc.Price.RawNano >= lo && poc.Price.RawNano <= hi && filledCount < filled.Length)
+            {
+                filled[filledCount++] = poc.Price.RawNano;
+            }
+        }
+        for (int i = 0; i < filledCount; i++)
+        {
+            _nakedPocs.MarkFilled(new Price(filled[i]), _sessionDate ?? default);
+        }
     }
 
     /// <summary>
@@ -236,7 +359,7 @@ public sealed class FeatureEngine
         {
             return;
         }
-        if (_sessionDate is not null)
+        if (_sessionDate is { } finished)
         {
             for (int i = 0; i < _deltaDist.Length; i++)
             {
@@ -244,16 +367,72 @@ public sealed class FeatureEngine
                 _intensityDist[i] = _intensityDist[i].StartNextSession();
             }
             _sizeDist = _sizeDist.StartNextSession();
+            _barDeltaDist = _barDeltaDist.StartNextSession();
             _cumDelta = 0;
             _extremeDirection = 0;
             _runSide = Side.None;
             _runLength = 0;
             _groupSide = Side.None;
             _groupPriceCount = 0;
+            _liquidity.Reset();
+            _atr.OnSessionRollover();
+
+            // The finished session's structure becomes context for the new one.
+            _priorDayHigh = _sessionHigh;
+            _priorDayLow = _sessionLow;
+            if (_profile.Poc is { } poc)
+            {
+                _priorPoc = poc;
+                _nakedPocs.Add(finished, poc);
+            }
+            if (_profile.ValueArea() is { } va)
+            {
+                _priorVah = va.Vah;
+                _priorVal = va.Val;
+            }
+            _profile = new SessionProfile(_tick, _opts);
+            _bars = new VolumeBarBuilder(_tick, _opts);
+            _sessionHigh = Price.Undefined;
+            _sessionLow = Price.Undefined;
+            _overnightHigh = Price.Undefined;
+            _overnightLow = Price.Undefined;
+            _rthStarted = false;
+            RefreshSessionLevels();
             // Time-windowed structures (ring, depth stats, swings, volume windows) flush
             // themselves across the ≥1h close→open gap; no explicit reset needed.
         }
         _sessionDate = date;
+    }
+
+    private void RefreshSessionLevels()
+    {
+        var levels = new List<(Price, LoiType)>(7);
+        if (!_priorDayHigh.IsUndefined)
+        {
+            levels.Add((_priorDayHigh, LoiType.PriorDayHigh));
+        }
+        if (!_priorDayLow.IsUndefined)
+        {
+            levels.Add((_priorDayLow, LoiType.PriorDayLow));
+        }
+        if (!_priorPoc.IsUndefined)
+        {
+            levels.Add((_priorPoc, LoiType.PriorPoc));
+        }
+        if (!_priorVah.IsUndefined)
+        {
+            levels.Add((_priorVah, LoiType.Vah));
+        }
+        if (!_priorVal.IsUndefined)
+        {
+            levels.Add((_priorVal, LoiType.Val));
+        }
+        if (_rthStarted && !_overnightHigh.IsUndefined)
+        {
+            levels.Add((_overnightHigh, LoiType.OvernightHigh));
+            levels.Add((_overnightLow, LoiType.OvernightLow));
+        }
+        _sessionLevels.SetLevels(levels);
     }
 
     public FeatureSnapshot ComputeSnapshot(BookStateTracker tracker)
@@ -281,6 +460,8 @@ public sealed class FeatureEngine
         var intensityZ = new double?[windowCount];
         var largePrints = new long?[windowCount];
         var sweepFlags = new bool[windowCount];
+        var pullRatioBid = new double?[windowCount];
+        var pullRatioAsk = new double?[windowCount];
         for (int i = 0; i < windowCount; i++)
         {
             var agg = _ring.WindowSum(i);
@@ -290,15 +471,54 @@ public sealed class FeatureEngine
             intensityZ[i] = _intensityDist[i].ZScore(agg.TradeCount);
             largePrints[i] = _sizeDist.IsReady ? agg.LargePrintCount : null;
             sweepFlags[i] = agg.SweepCount > 0;
+            pullRatioBid[i] = _liquidity.PullRatio(Side.Bid, i);
+            pullRatioAsk[i] = _liquidity.PullRatio(Side.Ask, i);
         }
 
         double? volAtPriceRatio = null;
-        if (tracker.TryGetBest(Side.Bid, out var bestBid) && _baselineVolume.MeanPerPriceVolume is { } mean && mean > 0)
+        bool hasBid = tracker.TryGetBest(Side.Bid, out var bestBid);
+        bool hasAsk = tracker.TryGetBest(Side.Ask, out var bestAsk);
+        if (hasBid && _baselineVolume.MeanPerPriceVolume is { } mean && mean > 0)
         {
             long stallVol = _stallVolume.VolumeAt(bestBid.Price)
                             + _stallVolume.VolumeAt(bestBid.Price.AddTicks(1, _tick));
             volAtPriceRatio = stallVol / mean;
         }
+
+        var forming = _bars.Forming;
+        var (diagBuy, diagSell) = FootprintFeatures.DiagonalImbalanceCounts(forming, _tick, _opts.DiagonalImbalanceRatio);
+        var valueArea = _profile.ValueArea();
+
+        long? distNakedPoc = null;
+        if (!_lastTradePrice.IsUndefined)
+        {
+            foreach (var poc in _nakedPocs.Active())
+            {
+                long dist = _lastTradePrice.TicksFrom(poc.Price, _tick);
+                if (distNakedPoc is not { } best || Math.Abs(dist) < Math.Abs(best))
+                {
+                    distNakedPoc = dist;
+                }
+            }
+        }
+
+        double? lvnDepthRatio = null;
+        long? distHvnUp = null;
+        long? distHvnDown = null;
+        if (!_lastTradePrice.IsUndefined && _profile.MeanPerPriceVolume is { } perPriceMean && perPriceMean > 0)
+        {
+            lvnDepthRatio = _profile.VolumeAt(_lastTradePrice) / perPriceMean;
+            if (_profile.NextHvn(_lastTradePrice, up: true) is { } hvnUp)
+            {
+                distHvnUp = hvnUp.TicksFrom(_lastTradePrice, _tick);
+            }
+            if (_profile.NextHvn(_lastTradePrice, up: false) is { } hvnDown)
+            {
+                distHvnDown = _lastTradePrice.TicksFrom(hvnDown, _tick);
+            }
+        }
+
+        var (todSin, todCos) = TimeContextFeatures.TodSinCos(_lastTs);
 
         return new FeatureSnapshot
         {
@@ -312,6 +532,7 @@ public sealed class FeatureEngine
             DepthZ = tracker.HasState ? _depthStats.ZScore(BookShapeFeatures.Top5Depth(levels)) : null,
             LoiDistanceTicks = loiDistance,
             NearestLoiType = loiType,
+            QueuePositionEst = null, // F7: MBO only
             Delta = delta,
             DeltaZ = deltaZ,
             CumDeltaDivergence = _extremeDirection == 0
@@ -326,7 +547,46 @@ public sealed class FeatureEngine
             SellDecay = ComputeDecay(sellSide: true),
             BuyDecay = ComputeDecay(sellSide: false),
             VolAtPriceRatio = volAtPriceRatio,
+            PullRatioBid = pullRatioBid,
+            PullRatioAsk = pullRatioAsk,
+            ReplenishRatioBid = hasBid ? _liquidity.ReplenishRatio(Side.Bid, bestBid.Price, _lastTs) : null,
+            ReplenishRatioAsk = hasAsk ? _liquidity.ReplenishRatio(Side.Ask, bestAsk.Price, _lastTs) : null,
+            RefreshCountBid = hasBid ? _liquidity.RefreshCount(Side.Bid, bestBid.Price, _lastTs) : 0,
+            RefreshCountAsk = hasAsk ? _liquidity.RefreshCount(Side.Ask, bestAsk.Price, _lastTs) : 0,
+            RefreshLatencyMs = null, // F19: MBO only
+            RefreshSizeCv = null,    // F20: MBO only
+            DepthChangeBid = _liquidity.DepthChangeBeyondBest(Side.Bid),
+            DepthChangeAsk = _liquidity.DepthChangeBeyondBest(Side.Ask),
+            VanishFlagBid = hasBid && _liquidity.VanishFlag(Side.Bid, bestBid.Price, bestBid.DisplayedSize, _lastTs),
+            VanishFlagAsk = hasAsk && _liquidity.VanishFlag(Side.Ask, bestAsk.Price, bestAsk.DisplayedSize, _lastTs),
+            DiagImbalanceBuyCount = diagBuy,
+            DiagImbalanceSellCount = diagSell,
+            StackedImbalanceLen = FootprintFeatures.StackedImbalanceLen(forming, _tick, _opts.DiagonalImbalanceRatio),
+            BarDelta = forming.Delta,
+            BarDeltaPctl = _barDeltaDist.IsReady ? _barDeltaDist.PercentileRank(forming.Delta) : null,
+            DeltaPriceDivergence = FootprintFeatures.DeltaPriceDivergence(forming),
+            ExtremeVolumeShareHigh = FootprintFeatures.ExtremeVolumeShare(forming, _tick, top: true),
+            ExtremeVolumeShareLow = FootprintFeatures.ExtremeVolumeShare(forming, _tick, top: false),
+            UnfinishedAuctionHigh = FootprintFeatures.UnfinishedAuction(forming, atHigh: true, _opts.UnfinishedAuctionMinVolume),
+            UnfinishedAuctionLow = FootprintFeatures.UnfinishedAuction(forming, atHigh: false, _opts.UnfinishedAuctionMinVolume),
+            PocDriftTicks = FootprintFeatures.PocDriftTicks(_bars, _tick),
+            DistPocTicks = Dist(_profile.Poc),
+            DistVahTicks = Dist(valueArea?.Vah),
+            DistValTicks = Dist(valueArea?.Val),
+            DistNakedPocTicks = distNakedPoc,
+            LvnDepthRatio = lvnDepthRatio,
+            DistNextHvnUpTicks = distHvnUp,
+            DistNextHvnDownTicks = distHvnDown,
+            Atr5Points = _atr.CurrentAtrPoints,
+            Atr5Pctl = _sessionDate is { } session ? _atr.Percentile(session) : null,
+            TodSin = todSin,
+            TodCos = todCos,
+            RthMinute = TimeContextFeatures.RthMinute(_lastTs),
+            NewsWindowFlag = TimeContextFeatures.NewsWindowFlag(_lastTs, _newsTimes, _opts.NewsWindowMinutes),
         };
+
+        long? Dist(Price? reference) =>
+            !_lastTradePrice.IsUndefined && reference is { } r ? _lastTradePrice.TicksFrom(r, _tick) : null;
     }
 
     /// <summary>
