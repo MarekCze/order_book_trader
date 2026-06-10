@@ -3,30 +3,48 @@ using OrderFlow.Domain.Primitives;
 
 namespace OrderFlow.Tests;
 
-/// <summary>Terse builders for hand-crafted golden-test event sequences.</summary>
+/// <summary>
+/// Terse builders for hand-crafted golden-test MBP-10 event sequences. Levels are given
+/// as (bidPx, bidSz, bidCt) / (askPx, askSz, askCt) tuples, best first; a null price marks
+/// an unpopulated slot.
+/// </summary>
 internal static class TestEvents
 {
     public const uint Instrument = 1;
     private static uint _seq;
 
-    public static MarketEvent Add(ulong id, Side side, decimal px, uint size, MarketEventFlags flags = MarketEventFlags.None, ulong ts = 1_000) =>
-        Make(MarketEventKind.AddOrder, id, side, px, size, flags, ts);
+    public static BookLevels Levels(
+        (decimal? Px, uint Sz, uint Ct)[] bids,
+        (decimal? Px, uint Sz, uint Ct)[] asks)
+    {
+        var levels = BookLevels.CreateEmpty();
+        for (int i = 0; i < BookLevels.Depth; i++)
+        {
+            var bid = i < bids.Length ? bids[i] : (Px: null, Sz: 0u, Ct: 0u);
+            var ask = i < asks.Length ? asks[i] : (Px: null, Sz: 0u, Ct: 0u);
+            levels[i] = new BidAskLevel(
+                BidPrice: bid.Px is { } bp ? Price.FromDecimal(bp) : Price.Undefined,
+                AskPrice: ask.Px is { } ap ? Price.FromDecimal(ap) : Price.Undefined,
+                BidSize: bid.Px is null ? 0 : bid.Sz,
+                AskSize: ask.Px is null ? 0 : ask.Sz,
+                BidCount: bid.Px is null ? 0 : bid.Ct,
+                AskCount: ask.Px is null ? 0 : ask.Ct);
+        }
+        return levels;
+    }
 
-    public static MarketEvent Cancel(ulong id, Side side, decimal px, uint size, ulong ts = 1_000) =>
-        Make(MarketEventKind.CancelOrder, id, side, px, size, MarketEventFlags.None, ts);
+    public static MarketEvent BookChanged(
+        BookCause cause, Side side, decimal px, uint size, byte depth, BookLevels levels,
+        MarketEventFlags flags = MarketEventFlags.None, ulong ts = 1_000) =>
+        new(MarketEventKind.BookChanged, cause, Instrument, new Timestamp(ts), new Timestamp(ts + 1), ++_seq,
+            Price.FromDecimal(px), size, side, flags, depth, levels);
 
-    public static MarketEvent Modify(ulong id, Side side, decimal px, uint size, ulong ts = 1_000) =>
-        Make(MarketEventKind.ModifyOrder, id, side, px, size, MarketEventFlags.None, ts);
-
-    public static MarketEvent Fill(ulong id, Side side, decimal px, uint size, ulong ts = 1_000) =>
-        Make(MarketEventKind.Fill, id, side, px, size, MarketEventFlags.None, ts);
-
-    public static MarketEvent Trade(Side aggressor, decimal px, uint size, ulong ts = 1_000) =>
-        Make(MarketEventKind.Trade, 0, aggressor, px, size, MarketEventFlags.None, ts);
+    public static MarketEvent Trade(
+        Side aggressor, decimal px, uint size, BookLevels levelsAfter, ulong ts = 1_000) =>
+        new(MarketEventKind.Trade, BookCause.None, Instrument, new Timestamp(ts), new Timestamp(ts + 1), ++_seq,
+            Price.FromDecimal(px), size, aggressor, MarketEventFlags.None, 0, levelsAfter);
 
     public static MarketEvent Clear(ulong ts = 1_000) =>
-        Make(MarketEventKind.BookClear, 0, Side.None, 0m, 0, MarketEventFlags.None, ts);
-
-    private static MarketEvent Make(MarketEventKind kind, ulong id, Side side, decimal px, uint size, MarketEventFlags flags, ulong ts) =>
-        new(kind, Instrument, new Timestamp(ts), new Timestamp(ts + 1), ++_seq, id, Price.FromDecimal(px), size, side, flags);
+        new(MarketEventKind.BookClear, BookCause.None, Instrument, new Timestamp(ts), new Timestamp(ts + 1), ++_seq,
+            Price.Undefined, 0, Side.None, MarketEventFlags.None, 0, BookLevels.CreateEmpty());
 }

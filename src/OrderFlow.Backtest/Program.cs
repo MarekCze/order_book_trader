@@ -16,11 +16,12 @@ static int Usage()
 
         Usage:
           orderflow replay <file.dbn[.zst]> --stats [--tick-size 0.25]
-              Stream a Databento DBN mbo file through decoder → book builder and
-              print event counts, session high/low, volume, spread range and throughput.
+              Stream a Databento DBN mbp-10 file through decoder → book state tracker and
+              print event counts, session high/low, volume by aggressor side, trade count,
+              spread range and throughput.
 
           orderflow synth <out.dbn.zst> [--events N] [--seed S]
-              Generate a deterministic synthetic MBO file (default 1,000,000 events, seed 42).
+              Generate a deterministic synthetic MBP-10 file (default 1,000,000 events, seed 42).
         """);
     return 2;
 }

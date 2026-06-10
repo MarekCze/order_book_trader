@@ -8,31 +8,33 @@ using ZstdSharp;
 namespace OrderFlow.Infrastructure.Dbn;
 
 /// <summary>
-/// Streaming decoder for Databento Binary Encoding (DBN) versions 1–3, mbo schema.
+/// Streaming decoder for Databento Binary Encoding (DBN) versions 1–3, mbp-10 schema.
 ///
-/// Implemented against the publicly documented layout:
+/// Implemented against the publicly documented layout, verified for this migration
+/// directly against the databento/dbn Rust crate sources (fetched 2026-06-10):
+///  - rust/dbn/src/record.rs — RecordHeader, Mbp10Msg, BidAskPair struct definitions
+///  - rust/dbn/src/enums.rs — rtype::MBP_10 = 0x0A, Schema::Mbp10 = 2, action/side chars
 ///  - Databento "Databento Binary Encoding" standards doc
 ///    (https://databento.com/docs/standards-and-conventions/databento-binary-encoding)
-///  - databento/dbn Rust crate as the authoritative struct reference:
-///    rust/dbn/src/record.rs (RecordHeader, MboMsg) and
-///    rust/dbn/src/decode/dbn/sync.rs (MetadataDecoder field order).
 ///
 /// File layout: magic "DBN" + 1-byte version + u32-LE metadata length + metadata + records.
 /// Records are fixed-size little-endian structs. RecordHeader.length is the TOTAL record
 /// size in 32-bit words (bytes = length * 4). When metadata.ts_out != 0 an extra u64 is
 /// appended to every record and included in that length — we advance past it and ignore it.
 ///
-/// Record types other than MBO (0xA0) — symbol mapping, system, error, etc. — are skipped
-/// and counted, never fatal.
+/// Record types other than MBP-10 (0x0A) — symbol mapping, system, error, etc. — are
+/// skipped and counted, never fatal.
 /// </summary>
 public sealed class DbnDecoder : IDisposable
 {
-    public const byte RTypeMbo = 0xA0;
+    public const byte RTypeMbp10 = 0x0A;
 
-    private const int HeaderSize = 16;          // RecordHeader: length u8, rtype u8, publisher_id u16, instrument_id u32, ts_event u64
-    private const int MboRecordSize = 56;       // RecordHeader + order_id u64, price i64, size u32, flags u8, channel_id u8, action c_char, side c_char, ts_recv u64, ts_in_delta i32, sequence u32
-    private const int MaxRecordSize = 255 * 4;  // length field is a u8 of 4-byte words
-    private const int MetadataFixedLen = 100;   // identical for v1 and v2/v3 (v1 record_count u64 ≙ v2 symbol_cstr_len u16 + 6 reserved)
+    private const int HeaderSize = 16;            // RecordHeader: length u8, rtype u8, publisher_id u16, instrument_id u32, ts_event u64
+    private const int LevelSize = 32;             // BidAskPair: bid_px i64, ask_px i64, bid_sz u32, ask_sz u32, bid_ct u32, ask_ct u32
+    private const int LevelsOffset = 48;          // header + price i64, size u32, action u8, side u8, flags u8, depth u8, ts_recv u64, ts_in_delta i32, sequence u32
+    private const int Mbp10RecordSize = LevelsOffset + BookLevels.Depth * LevelSize; // 368
+    private const int MaxRecordSize = 255 * 4;    // length field is a u8 of 4-byte words
+    private const int MetadataFixedLen = 100;     // identical for v1 and v2/v3 (v1 record_count u64 ≙ v2 symbol_cstr_len u16 + 6 reserved)
     private const ushort SymbolCstrLenV1 = 22;
     private const uint ZstdMagicLe = 0xFD2FB528;
 
@@ -44,14 +46,18 @@ public sealed class DbnDecoder : IDisposable
     private bool _inSnapshot;
     private bool _hasPending;
     private MarketEvent _pending;
+    private uint _lastInstrumentId;
+    private Timestamp _lastTsEvent;
+    private Timestamp _lastTsRecv;
+    private uint _lastSequence;
 
     public DbnMetadata Metadata { get; }
 
-    /// <summary>Count of skipped (non-MBO) records, indexed by rtype.</summary>
+    /// <summary>Count of skipped (non-MBP-10) records, indexed by rtype.</summary>
     public IReadOnlyList<long> SkippedByRtype => _skippedByRtype;
 
-    /// <summary>MBO records carrying action 'N' (None) or an unrecognized action char.</summary>
-    public long IgnoredMboActionCount { get; private set; }
+    /// <summary>MBP-10 records carrying action 'N'/'F' (not meaningful at this schema) or an unrecognized action char.</summary>
+    public long IgnoredActionCount { get; private set; }
 
     private DbnDecoder(Stream stream, DbnMetadata metadata, bool disposeStream)
     {
@@ -120,18 +126,18 @@ public sealed class DbnDecoder : IDisposable
             TryFill(HeaderSize, totalLen - HeaderSize, allowCleanEof: false);
 
             byte rtype = _buf[1];
-            if (rtype != RTypeMbo)
+            if (rtype != RTypeMbp10)
             {
                 _skippedByRtype[rtype]++;
                 continue;
             }
-            if (totalLen < MboRecordSize)
+            if (totalLen < Mbp10RecordSize)
             {
-                throw new DbnFormatException($"MBO record of {totalLen} bytes is smaller than the {MboRecordSize}-byte MboMsg.");
+                throw new DbnFormatException($"MBP-10 record of {totalLen} bytes is smaller than the {Mbp10RecordSize}-byte Mbp10Msg.");
             }
-            if (!TryMapMbo(_buf.AsSpan(0, MboRecordSize), out e))
+            if (!TryMapMbp10(_buf.AsSpan(0, Mbp10RecordSize), out e))
             {
-                IgnoredMboActionCount++;
+                IgnoredActionCount++;
                 continue;
             }
 
@@ -156,55 +162,66 @@ public sealed class DbnDecoder : IDisposable
         }
     }
 
-    private uint _lastInstrumentId;
-    private Timestamp _lastTsEvent;
-    private Timestamp _lastTsRecv;
-    private uint _lastSequence;
-
     private static MarketEvent MakeSnapshotEnd(uint instrumentId, Timestamp tsEvent, Timestamp tsRecv, uint sequence) =>
-        new(MarketEventKind.SnapshotEnd, instrumentId, tsEvent, tsRecv, sequence,
-            OrderId: 0, Price.Undefined, Size: 0, Side.None, MarketEventFlags.None);
+        new(MarketEventKind.SnapshotEnd, BookCause.None, instrumentId, tsEvent, tsRecv, sequence,
+            Price.Undefined, Size: 0, Side.None, MarketEventFlags.None, Depth: 0, default);
 
     /// <summary>
-    /// MboMsg field offsets (databento/dbn rust/dbn/src/record.rs, identical across v1–v3):
+    /// Mbp10Msg field offsets (databento/dbn rust/dbn/src/record.rs, verified 2026-06-10):
     ///   0 length u8 | 1 rtype u8 | 2 publisher_id u16 | 4 instrument_id u32 | 8 ts_event u64
-    ///  16 order_id u64 | 24 price i64 | 32 size u32 | 36 flags u8 | 37 channel_id u8
-    ///  38 action c_char | 39 side c_char | 40 ts_recv u64 | 48 ts_in_delta i32 | 52 sequence u32
+    ///  16 price i64 | 24 size u32 | 28 action c_char | 29 side c_char | 30 flags u8 | 31 depth u8
+    ///  32 ts_recv u64 | 40 ts_in_delta i32 | 44 sequence u32
+    ///  48 levels: 10 × BidAskPair { bid_px i64, ask_px i64, bid_sz u32, ask_sz u32, bid_ct u32, ask_ct u32 } = 368 total.
     /// </summary>
-    private static bool TryMapMbo(ReadOnlySpan<byte> r, out MarketEvent e)
+    private static bool TryMapMbp10(ReadOnlySpan<byte> r, out MarketEvent e)
     {
-        var kind = (char)r[38] switch
+        var (kind, cause) = (char)r[28] switch
         {
-            'A' => MarketEventKind.AddOrder,
-            'M' => MarketEventKind.ModifyOrder,
-            'C' => MarketEventKind.CancelOrder,
-            'F' => MarketEventKind.Fill,
-            'T' => MarketEventKind.Trade,
-            'R' => MarketEventKind.BookClear,
-            _ => MarketEventKind.None, // 'N' or unknown: counted and dropped
+            'A' => (MarketEventKind.BookChanged, BookCause.Add),
+            'C' => (MarketEventKind.BookChanged, BookCause.Cancel),
+            'M' => (MarketEventKind.BookChanged, BookCause.Modify),
+            'T' => (MarketEventKind.Trade, BookCause.None),
+            'R' => (MarketEventKind.BookClear, BookCause.None),
+            _ => (MarketEventKind.None, BookCause.None), // 'N'/'F'/unknown: counted and dropped
         };
         if (kind == MarketEventKind.None)
         {
             e = default;
             return false;
         }
-        var side = (char)r[39] switch
+        var side = (char)r[29] switch
         {
             'B' => Side.Bid,
             'A' => Side.Ask,
             _ => Side.None,
         };
+
+        var levels = new BookLevels();
+        for (int i = 0; i < BookLevels.Depth; i++)
+        {
+            var l = r.Slice(LevelsOffset + i * LevelSize, LevelSize);
+            levels[i] = new BidAskLevel(
+                BidPrice: new Price(BinaryPrimitives.ReadInt64LittleEndian(l)),
+                AskPrice: new Price(BinaryPrimitives.ReadInt64LittleEndian(l[8..])),
+                BidSize: BinaryPrimitives.ReadUInt32LittleEndian(l[16..]),
+                AskSize: BinaryPrimitives.ReadUInt32LittleEndian(l[20..]),
+                BidCount: BinaryPrimitives.ReadUInt32LittleEndian(l[24..]),
+                AskCount: BinaryPrimitives.ReadUInt32LittleEndian(l[28..]));
+        }
+
         e = new MarketEvent(
             kind,
+            cause,
             InstrumentId: BinaryPrimitives.ReadUInt32LittleEndian(r[4..]),
             TsEvent: new Timestamp(BinaryPrimitives.ReadUInt64LittleEndian(r[8..])),
-            TsRecv: new Timestamp(BinaryPrimitives.ReadUInt64LittleEndian(r[40..])),
-            Sequence: BinaryPrimitives.ReadUInt32LittleEndian(r[52..]),
-            OrderId: BinaryPrimitives.ReadUInt64LittleEndian(r[16..]),
-            Price: new Price(BinaryPrimitives.ReadInt64LittleEndian(r[24..])),
-            Size: BinaryPrimitives.ReadUInt32LittleEndian(r[32..]),
+            TsRecv: new Timestamp(BinaryPrimitives.ReadUInt64LittleEndian(r[32..])),
+            Sequence: BinaryPrimitives.ReadUInt32LittleEndian(r[44..]),
+            Price: new Price(BinaryPrimitives.ReadInt64LittleEndian(r[16..])),
+            Size: BinaryPrimitives.ReadUInt32LittleEndian(r[24..]),
             Side: side,
-            Flags: (MarketEventFlags)r[36]);
+            Flags: (MarketEventFlags)r[30],
+            Depth: r[31],
+            Levels: levels);
         return true;
     }
 

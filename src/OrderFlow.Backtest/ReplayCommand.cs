@@ -20,7 +20,7 @@ internal static class ReplayCommand
         var tick = TickSize.FromDecimal(tickDecimal);
 
         var source = new DbnFileMarketEventSource(path);
-        var stage = new BookBuilderStage();
+        var stage = new BookStateTrackerStage();
         var stats = new StatsCollector(tick);
 
         // Wall-clock time is allowed here ONLY for throughput measurement (CLI host);
@@ -39,7 +39,7 @@ internal static class ReplayCommand
 
         var md = source.Metadata!;
         Console.WriteLine($"File:     {path}");
-        Console.WriteLine($"DBN:      v{md.Version}, dataset {md.Dataset}, schema {(md.IsMboSchema ? "mbo" : $"raw={md.RawSchema}")}, " +
+        Console.WriteLine($"DBN:      v{md.Version}, dataset {md.Dataset}, schema {(md.IsMbp10Schema ? "mbp-10" : $"raw={md.RawSchema}")}, " +
                           $"symbols [{string.Join(", ", md.Symbols)}]");
         Console.WriteLine($"Window:   {md.Start} -> {md.End}");
         Console.WriteLine($"Tick:     {tick}");
@@ -56,15 +56,15 @@ internal static class ReplayCommand
                 skippedTotal += source.SkippedByRtype[rtype];
             }
         }
-        if (source.IgnoredMboActionCount > 0)
+        if (source.IgnoredActionCount > 0)
         {
-            Console.WriteLine($"Ignored MBO 'N'/unknown actions: {source.IgnoredMboActionCount:N0}");
+            Console.WriteLine($"Ignored 'N'/'F'/unknown actions: {source.IgnoredActionCount:N0}");
         }
 
         double seconds = sw.Elapsed.TotalSeconds;
         double rate = seconds > 0 ? source.EventsRead / seconds : 0;
         Console.WriteLine();
-        Console.WriteLine($"Replayed {source.EventsRead:N0} events ({skippedTotal:N0} non-MBO records skipped) " +
+        Console.WriteLine($"Replayed {source.EventsRead:N0} events ({skippedTotal:N0} non-MBP-10 records skipped) " +
                           $"in {seconds:F2}s = {rate:N0} events/s");
         return 0;
     }
