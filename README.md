@@ -6,6 +6,7 @@ against it.
 
 - Product spec: [`order-flow-setups-rulebook.md`](order-flow-setups-rulebook.md)
 - Architecture & roadmap: [`CLAUDE.md`](CLAUDE.md)
+- Running on real data: [`GUIDE.md`](GUIDE.md)
 
 ## Build & test
 
