@@ -15,10 +15,11 @@ static int Usage()
         orderflow — Order Flow Trading Bot CLI (backtest host)
 
         Usage:
-          orderflow replay <file.dbn[.zst]> --stats [--tick-size 0.25]
+          orderflow replay <file.dbn[.zst]> --stats [--features] [--tick-size 0.25]
               Stream a Databento DBN mbp-10 file through decoder → book state tracker and
               print event counts, session high/low, volume by aggressor side, trade count,
-              spread range and throughput.
+              spread range and throughput. --features also runs the M2 feature engine
+              (F1-F15) and prints each instrument's final snapshot.
 
           orderflow synth <out.dbn.zst> [--events N] [--seed S]
               Generate a deterministic synthetic MBP-10 file (default 1,000,000 events, seed 42).

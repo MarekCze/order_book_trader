@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Configuration;
+using OrderFlow.Domain.Features;
 
 namespace OrderFlow.Infrastructure.Config;
 
@@ -10,6 +11,7 @@ public sealed class AppOptions
 {
     public InstrumentOptions Instrument { get; set; } = new();
     public PipelineOptions Pipeline { get; set; } = new();
+    public FeatureEngineOptions Features { get; set; } = new();
 
     public static AppOptions Load(string? basePath = null)
     {
@@ -18,6 +20,16 @@ public sealed class AppOptions
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
             .Build();
         var options = new AppOptions();
+        // The binder APPENDS JSON array items to a property's non-empty default array;
+        // explicitly configured arrays must replace the default, so blank them first.
+        if (config.GetSection("Features:FlowWindowsSeconds").Exists())
+        {
+            options.Features.FlowWindowsSeconds = Array.Empty<int>();
+        }
+        if (config.GetSection("Features:DepthImbalanceLevels").Exists())
+        {
+            options.Features.DepthImbalanceLevels = Array.Empty<int>();
+        }
         config.Bind(options);
         return options;
     }

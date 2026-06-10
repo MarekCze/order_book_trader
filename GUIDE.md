@@ -55,6 +55,9 @@ Options:
 
 - `--tick-size 0.25` — override the instrument tick size (defaults to ES = 0.25 from
   `src/OrderFlow.Backtest/appsettings.json`).
+- `--features` — also run the M2 feature engine (F1–F15) over the replay and print each
+  instrument's final feature snapshot. Thresholds and windows come from the `Features`
+  section of `appsettings.json`.
 
 Expected output shape:
 
@@ -91,9 +94,14 @@ summary, or your charting platform's daily stats for the same contract and windo
    misalignment shows up here immediately).
 3. **Buy volume + sell volume ≈ total volume.** A large residual means many trades carry
    side `N`, which would matter for delta features in M2.
-4. **Min spread = 1 tick**, and the overwhelming majority of two-sided samples should be
-   at 1 tick for ES in RTH. A nonsensical min/max spread is the clearest symptom of a
-   wrong level-array offset in the decoder.
+4. **Min spread = 1 tick** for an RTH-windowed export, and the overwhelming majority of
+   two-sided samples should be at 1 tick for ES in RTH. A nonsensical min/max spread is
+   the clearest symptom of a wrong level-array offset in the decoder. **Exception:** a
+   full-day file legitimately shows a negative min spread — during the CME pre-open
+   (~17:45–18:00 ET, after the maintenance break) orders rest without matching and the
+   book can cross. Confirm the crossed samples fall only in that window (Friday files
+   have no evening reopen, so no pre-open and min spread = 1) before suspecting the
+   decoder.
 5. **Final book BBO** is a plausible price near the session close.
 6. **Skipped / ignored counts are explainable.** Skipped rtypes like `0x16`
    (symbol mapping) or `0x17` (system) in small numbers are normal. Thousands of
