@@ -22,13 +22,20 @@ internal static class ReplayCommand
         var source = new DbnFileMarketEventSource(path);
         var stage = new BookStateTrackerStage();
         var stats = new StatsCollector(tick);
+        FeatureEngineStage? features = null;
+        IBookEventObserver observer = stats;
+        if (CliArgs.HasFlag(rest, "--features"))
+        {
+            features = new FeatureEngineStage(tick, options.Features);
+            observer = new CompositeBookEventObserver(stats, features);
+        }
 
         // Wall-clock time is allowed here ONLY for throughput measurement (CLI host);
         // all pipeline logic runs on event timestamps.
         var sw = Stopwatch.StartNew();
         try
         {
-            await ReplayPipeline.RunAsync(source, stage, stats, options.Pipeline.ChannelCapacity);
+            await ReplayPipeline.RunAsync(source, stage, observer, options.Pipeline.ChannelCapacity);
         }
         catch (DbnFormatException ex)
         {
@@ -46,6 +53,11 @@ internal static class ReplayCommand
         Console.WriteLine();
         stats.Print(Console.Out, stage);
         Console.WriteLine();
+        if (features is not null)
+        {
+            FeatureSnapshotPrinter.Print(Console.Out, features, options.Features);
+            Console.WriteLine();
+        }
 
         long skippedTotal = 0;
         for (int rtype = 0; rtype < source.SkippedByRtype.Count; rtype++)
