@@ -61,6 +61,20 @@ Options:
   state (naked POCs, ATR history) is in-memory by default; set `Storage:SqlitePath` to
   persist it when replaying consecutive sessions in order — note a persistent db makes
   repeated replays of the same file non-identical by design.
+- `--trade` (M4) — additionally run the setup detectors (Setup 1 absorption fade, long +
+  short) against the fill simulator with global risk filters 1–6, and write the candidate
+  journal (SQLite; default `<file>.journal.db`, recreated each run, override with
+  `--journal path`). Prints a per-detector signal funnel and a trading summary.
+  `--export-csv dir` / `--export-parquet dir` export the journal tables. Notes:
+  - The ATR volatility filter (global filter 3) needs ≥ 5 distinct days of ATR history in
+    `Storage:SqlitePath` — on a cold single-file run every candidate is blocked as
+    `Volatility` by design. Replay several consecutive days with a persistent state db
+    first (the same caveat as F34).
+  - With the rulebook's default thresholds, candidates are RARE. On the five validation
+    days (2026-06-01..05) the strict config produced zero candidates — A4 (stall volume
+    ≥ 3× the 15-minute per-price baseline) is the binding constraint, then A5
+    (replenish ratio ≥ 2.5). The funnel line shows where the chain stops; thresholds are
+    config (`Detectors:Setup1`), stated by the rulebook as starting parameters to falsify.
 
 Expected output shape:
 
