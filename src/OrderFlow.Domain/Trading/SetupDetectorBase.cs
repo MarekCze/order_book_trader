@@ -53,6 +53,11 @@ public abstract class SetupDetectorBase
 
     public SetupState State { get; protected set; }
 
+    /// <summary>Optional one-line funnel/diagnostic summary printed by the backtest CLI for
+    /// calibration (how often context was reached, candidates emitted, etc.). Null = nothing to
+    /// report. Diagnostic only — never read by trading logic.</summary>
+    public virtual string? FunnelLine() => null;
+
     /// <summary>+1 for long, −1 for short: guards and price offsets are written in long
     /// space and mirrored through this sign.</summary>
     protected int Sign => Direction == TradeDirection.Long ? 1 : -1;

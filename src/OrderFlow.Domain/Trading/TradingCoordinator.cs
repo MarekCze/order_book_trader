@@ -11,6 +11,9 @@ namespace OrderFlow.Domain.Trading;
 public sealed class TradingOptions
 {
     public Setup1Options Setup1 { get; set; } = new();
+    public Setup2Options Setup2 { get; set; } = new();
+    public LvnVacuumOptions Setup4 { get; set; } = new();
+    public Setup5Options Setup5 { get; set; } = new();
 }
 
 /// <summary>
@@ -52,6 +55,33 @@ public sealed class TradingCoordinator : IFillListener
             {
                 detectors.Add(new AbsorptionFadeDetector(
                     tick, options.Setup1, direction, _risk,
+                    new RoutedPort(this, detectors.Count), journal, execOptions, riskOptions, nextCandidateId));
+            }
+        }
+        if (options.Setup2.Enabled)
+        {
+            foreach (var direction in new[] { TradeDirection.Long, TradeDirection.Short })
+            {
+                detectors.Add(new StopRunFadeDetector(
+                    tick, options.Setup2, direction, _risk,
+                    new RoutedPort(this, detectors.Count), journal, execOptions, riskOptions, nextCandidateId));
+            }
+        }
+        if (options.Setup4.Enabled)
+        {
+            foreach (var direction in new[] { TradeDirection.Long, TradeDirection.Short })
+            {
+                detectors.Add(new LvnVacuumDetector(
+                    tick, options.Setup4, direction, _risk,
+                    new RoutedPort(this, detectors.Count), journal, execOptions, riskOptions, nextCandidateId));
+            }
+        }
+        if (options.Setup5.Enabled)
+        {
+            foreach (var direction in new[] { TradeDirection.Long, TradeDirection.Short })
+            {
+                detectors.Add(new DeltaDivergenceFadeDetector(
+                    tick, options.Setup5, direction, _risk,
                     new RoutedPort(this, detectors.Count), journal, execOptions, riskOptions, nextCandidateId));
             }
         }

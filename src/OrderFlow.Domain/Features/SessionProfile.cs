@@ -102,6 +102,29 @@ public sealed class SessionProfile
             && NearestUnequal(raw, volume, downward: false) > volume;
     }
 
+    /// <summary>Nearest LVN to <paramref name="from"/> scanning in one direction (inclusive of
+    /// <paramref name="from"/>) up to <paramref name="maxTicks"/> ticks; false if none. Setup 4's
+    /// D1 proximity test ("price within N ticks of a profile LVN").</summary>
+    public bool TryGetNearestLvn(Price from, bool up, int maxTicks, out Price lvn)
+    {
+        lvn = Price.Undefined;
+        if (_pocRaw == long.MinValue)
+        {
+            return false;
+        }
+        long step = up ? _tick.RawNano : -_tick.RawNano;
+        long raw = from.RawNano;
+        for (int i = 0; i <= maxTicks; i++, raw += step)
+        {
+            if (raw > _lowRaw && raw < _highRaw && IsLvn(new Price(raw)))
+            {
+                lvn = new Price(raw);
+                return true;
+            }
+        }
+        return false;
+    }
+
     public IReadOnlyList<Price> Lvns()
     {
         if (_pocRaw == long.MinValue)

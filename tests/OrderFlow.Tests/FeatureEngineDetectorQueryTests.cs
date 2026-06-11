@@ -128,4 +128,84 @@ public class FeatureEngineDetectorQueryTests
         Assert.True(h.Engine.IsNewsWindow(new Timestamp(At(25 * 60))));   // 14:25, inside ±10min
         Assert.False(h.Engine.IsNewsWindow(new Timestamp(At(55 * 60)))); // 14:55, outside
     }
+
+    // ----- M5: swing divergence (Setup 5 E1/E2) -----
+
+    [Fact]
+    public void LastHighDivergence_ReportsPriorAndNewHighWithCumDelta()
+    {
+        var h = new Harness();
+        h.Trade(Side.Bid, 5000.00m, 100, At(0)); // cumDelta 100; first print, no high yet
+        h.Trade(Side.Bid, 5000.50m, 10, At(1));  // leg peak 5000.50 (cumDelta 110)
+        h.Trade(Side.Ask, 4999.50m, 50, At(2));  // 4-tick pullback confirms 5000.50 as the swing high
+        h.Trade(Side.Bid, 5001.00m, 10, At(3));  // new high H2, cumDelta 70 < 110 → bearish divergence
+
+        var d = h.Engine.LastHighDivergence;
+        Assert.NotNull(d);
+        Assert.Equal(Price.FromDecimal(5000.50m), d!.Value.PriorExtreme);
+        Assert.Equal(Price.FromDecimal(5001.00m), d.Value.NewExtreme);
+        Assert.Equal(110, d.Value.CumDeltaPrior);
+        Assert.Equal(70, d.Value.CumDeltaNew);
+        Assert.Equal(At(3), d.Value.Ts.UnixNanos); // event-synced: only fresh on the new-high event
+    }
+
+    [Fact]
+    public void LastLowDivergence_MirrorsForNewLows()
+    {
+        var h = new Harness();
+        h.Trade(Side.Ask, 5000.00m, 100, At(0)); // cumDelta -100
+        h.Trade(Side.Ask, 4999.50m, 10, At(1));  // leg trough 4999.50 (cumDelta -110)
+        h.Trade(Side.Bid, 5000.50m, 50, At(2));  // 4-tick pullback confirms 4999.50 as the swing low
+        h.Trade(Side.Ask, 4999.00m, 10, At(3));  // new low, cumDelta -70 > -110 → bullish divergence
+
+        var d = h.Engine.LastLowDivergence;
+        Assert.NotNull(d);
+        Assert.Equal(Price.FromDecimal(4999.50m), d!.Value.PriorExtreme);
+        Assert.Equal(Price.FromDecimal(4999.00m), d.Value.NewExtreme);
+        Assert.Equal(-110, d.Value.CumDeltaPrior);
+        Assert.Equal(-70, d.Value.CumDeltaNew);
+    }
+
+    [Fact]
+    public void FormingBar_IsExposed()
+    {
+        var h = new Harness();
+        h.Trade(Side.Bid, 5000.00m, 10, At(0));
+        h.Trade(Side.Ask, 5000.25m, 4, At(1));
+        Assert.Equal(6, h.Engine.FormingBar.Delta); // 10 buy − 4 sell
+    }
+
+    // ----- M5: Setup 2 (stop-run fade) -----
+
+    [Fact]
+    public void BarBuyVolumeQuantile_RanksCompletedBars()
+    {
+        var h = new Harness(new FeatureEngineOptions { BarVolumeSize = 10, MinBarSamples = 3 });
+        Assert.Null(h.Engine.BarAggressiveVolumeQuantile(buySide: true, 0.9)); // not enough bars
+
+        h.Trade(Side.Bid, 5000.00m, 10, At(0)); // bar: buyVol 10
+        h.Trade(Side.Bid, 5000.00m, 5, At(1));
+        h.Trade(Side.Ask, 5000.00m, 5, At(2));  // bar: buyVol 5
+        h.Trade(Side.Ask, 5000.00m, 10, At(3)); // bar: buyVol 0
+
+        Assert.Equal(10, h.Engine.BarAggressiveVolumeQuantile(buySide: true, 0.9)); // {0,5,10} → P90 = 10
+        Assert.Equal(10, h.Engine.BarAggressiveVolumeQuantile(buySide: false, 0.9)); // sell side {0,5,10}
+    }
+
+    [Fact]
+    public void TryGetSweptReference_FindsOvernightHighInSweepZone()
+    {
+        var h = new Harness();
+        ulong overnight = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 1, 13, 0, 0, TimeSpan.Zero)).UnixNanos;
+        ulong rth = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 1, 13, 31, 0, TimeSpan.Zero)).UnixNanos;
+        h.Trade(Side.Bid, 5000.00m, 10, overnight); // 09:00 ET → overnight high 5000.00
+        h.Trade(Side.Bid, 5000.50m, 10, rth);       // 09:31 ET → ONH freezes as a reference high
+
+        Assert.True(h.Engine.TryGetSweptReference(
+            Price.FromDecimal(5000.50m), high: true, minTicks: 1, maxTicks: 5, out var reference));
+        Assert.Equal(Price.FromDecimal(5000.00m), reference); // 2 ticks below the query price
+
+        Assert.False(h.Engine.TryGetSweptReference(
+            Price.FromDecimal(5002.00m), high: true, minTicks: 1, maxTicks: 5, out _)); // 8 ticks → a breakout
+    }
 }
