@@ -5,8 +5,9 @@ namespace OrderFlow.Backtest;
 /// <summary>
 /// Post-replay trading summary read back from the journal database: per setup/direction
 /// candidate funnel (blocked → expired/cancelled → traded), win/loss split, net P&L, and
-/// breakdowns by risk filter and exit reason. Full reporting (expectancy, MAE/MFE
-/// distributions, equity curve) is M6 — this is the sanity readout.
+/// breakdowns by risk filter and exit reason. This is the inline sanity readout; the full
+/// M6 report (expectancy, MAE/MFE distributions, equity curve, markdown + CSVs) is produced
+/// by <see cref="ReportCommand"/> / <c>orderflow report</c> and the replay --report flag.
 /// </summary>
 internal static class TradeSummaryPrinter
 {
