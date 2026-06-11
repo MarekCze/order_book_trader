@@ -5,6 +5,7 @@ return args switch
 {
     ["replay", var file, .. var rest] => await ReplayCommand.RunAsync(file, rest),
     ["synth", var file, .. var rest] => SynthCommand.Run(file, rest),
+    ["report", var db, .. var rest] => ReportCommand.Run(db, rest),
     _ => Usage(),
 };
 
@@ -16,14 +17,21 @@ static int Usage()
 
         Usage:
           orderflow replay <file.dbn[.zst]> --stats [--features] [--trade] [--tick-size 0.25]
-                   [--journal out.db] [--export-csv dir] [--export-parquet dir]
+                   [--journal out.db] [--export-csv dir] [--export-parquet dir] [--report dir]
               Stream a Databento DBN mbp-10 file through decoder → book state tracker and
               print event counts, session high/low, volume by aggressor side, trade count,
               spread range and throughput. --features also runs the feature engine
               (F1-F36) and prints each instrument's final snapshot. --trade additionally
               runs the detectors + fill simulator + risk filters and writes the candidate
               journal (default <file>.journal.db, recreated each run), printing a trading
-              summary; --export-csv/--export-parquet export the journal tables.
+              summary; --export-csv/--export-parquet export the journal tables; --report dir
+              writes the M6 markdown report + CSVs (report.md + report/ inside dir).
+
+          orderflow report <journal.db> [--out report.md] [--csv-dir dir] [--title "..."]
+              Compute the M6 backtest report from an existing journal: per-setup expectancy
+              net of costs, hit rate, MAE/MFE distributions, invalidation-vs-stop exit
+              breakdown and equity curve. Writes a markdown report and CSV side-files
+              (report_summary.csv, equity_curve.csv, trades.csv).
 
           orderflow synth <out.dbn.zst> [--events N] [--seed S]
               Generate a deterministic synthetic MBP-10 file (default 1,000,000 events, seed 42).

@@ -122,6 +122,20 @@ internal static class ReplayCommand
                 await JournalExporter.ExportParquetAsync(journalPath, parquetDir);
                 Console.WriteLine($"Parquet:  {parquetDir}");
             }
+            if (CliArgs.GetOption(rest, "--report") is { } reportDir)
+            {
+                Directory.CreateDirectory(reportDir);
+                var meta = new Reporting.ReportMeta(
+                    Title: $"{options.Instrument.Symbol} Backtest Report",
+                    Sources: new[] { Path.GetFileName(path) },
+                    CommissionPerRoundTurn: options.Execution.CommissionPerContractRoundTurn,
+                    TickValue: options.Risk.TickValue);
+                ReportCommand.Generate(
+                    journalPath, meta,
+                    Path.Combine(reportDir, "report.md"),
+                    Path.Combine(reportDir, "report"),
+                    Console.Out);
+            }
             Console.WriteLine();
         }
 
