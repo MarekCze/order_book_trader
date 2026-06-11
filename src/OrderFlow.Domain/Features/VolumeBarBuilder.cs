@@ -166,6 +166,82 @@ public static class FootprintFeatures
         return maxRun;
     }
 
+    /// <summary>B5: longest run of consecutive diagonal imbalances on one side (sell for the
+    /// stated short's stacked-offer confirmation, buy for the long mirror).</summary>
+    public static int StackedImbalanceLen(FootprintBar bar, TickSize tick, double ratio, bool sellSide)
+    {
+        int maxRun = 0, run = 0;
+        ForEachPrice(bar, tick, (price, buy, sell) =>
+        {
+            bool imbalanced = sellSide
+                ? IsSellImbalance(bar, tick, price, sell, ratio)
+                : IsBuyImbalance(bar, tick, price, buy, ratio);
+            run = imbalanced ? run + 1 : 0;
+            maxRun = Math.Max(maxRun, run);
+        });
+        return maxRun;
+    }
+
+    /// <summary>B3: aggressive buy (or sell) volume executed at prices at or above (or at or below)
+    /// <paramref name="level"/> — the rulebook's "≥ 60% of climax volume executing at or above H".</summary>
+    public static long AggressorVolumeBeyond(
+        FootprintBar bar, TickSize tick, Price level, bool buySide, bool atOrAbove)
+    {
+        long sum = 0;
+        ForEachPrice(bar, tick, (price, buy, sell) =>
+        {
+            bool inRange = atOrAbove ? price.RawNano >= level.RawNano : price.RawNano <= level.RawNano;
+            if (inRange)
+            {
+                sum += buySide ? buy : sell;
+            }
+        });
+        return sum;
+    }
+
+    /// <summary>E4: any diagonal sell imbalance at a price within <paramref name="withinTicks"/>
+    /// of <paramref name="center"/> (the swept high). The band is clamped to nothing special —
+    /// empty cells never imbalance.</summary>
+    public static bool HasSellImbalanceNear(
+        FootprintBar bar, TickSize tick, Price center, int withinTicks, double ratio)
+    {
+        if (bar.Open.IsUndefined)
+        {
+            return false;
+        }
+        for (int d = -withinTicks; d <= withinTicks; d++)
+        {
+            var price = center.AddTicks(d, tick);
+            var (_, sell) = bar.VolumeAt(price);
+            if (IsSellImbalance(bar, tick, price, sell, ratio))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>E4 mirror: any diagonal buy imbalance within <paramref name="withinTicks"/> of the
+    /// swept low.</summary>
+    public static bool HasBuyImbalanceNear(
+        FootprintBar bar, TickSize tick, Price center, int withinTicks, double ratio)
+    {
+        if (bar.Open.IsUndefined)
+        {
+            return false;
+        }
+        for (int d = -withinTicks; d <= withinTicks; d++)
+        {
+            var price = center.AddTicks(d, tick);
+            var (buy, _) = bar.VolumeAt(price);
+            if (IsBuyImbalance(bar, tick, price, buy, ratio))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// <summary>F27: share of bar volume in the two tick levels at the high (or low).</summary>
     public static double? ExtremeVolumeShare(FootprintBar bar, TickSize tick, bool top)
     {

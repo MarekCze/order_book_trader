@@ -56,6 +56,8 @@ public sealed class FeatureEngine
     private VolumeBarBuilder _bars;
     private SessionProfile _profile;
     private SessionDistribution _barDeltaDist;
+    private SessionDistribution _barBuyVolDist;  // Setup 2 B3 climax (short)
+    private SessionDistribution _barSellVolDist; // Setup 2 B3 climax (long mirror)
 
     private DateOnly? _sessionDate;
     private Timestamp _lastTs;
@@ -77,6 +79,19 @@ public sealed class FeatureEngine
     // F9 swing state
     private int _extremeDirection;
     private long _cumDeltaAtExtreme;
+
+    // Setup 5 swing-divergence state: the last new-high / new-low and the cumDelta when set,
+    // plus the latest prior-vs-new divergence sample (event-synced via its timestamp).
+    private Price _curHigh = Price.Undefined; // last pullback-confirmed swing high (H1)
+    private Price _curLow = Price.Undefined;
+    private long _cumDeltaAtCurHigh;
+    private long _cumDeltaAtCurLow;
+    private Price _legHigh = Price.Undefined;  // running peak of the current advance leg
+    private Price _legLow = Price.Undefined;
+    private long _cumDeltaAtLegHigh;
+    private long _cumDeltaAtLegLow;
+    private SwingDivergence? _lastHighDiv;
+    private SwingDivergence? _lastLowDiv;
 
     // F11 run state
     private Side _runSide = Side.None;
@@ -104,6 +119,8 @@ public sealed class FeatureEngine
         _bars = new VolumeBarBuilder(tick, options);
         _barDeltaDist = new SessionDistribution(
             -2L * options.BarVolumeSize, 2L * options.BarVolumeSize, options.MinBarSamples);
+        _barBuyVolDist = new SessionDistribution(0, 2L * options.BarVolumeSize, options.MinBarSamples);
+        _barSellVolDist = new SessionDistribution(0, 2L * options.BarVolumeSize, options.MinBarSamples);
         // Tie priority: session structure first, then naked POCs, LVNs, round numbers.
         _loi = loiOverride ?? new CompositeLoiProvider(
             _sessionLevels,
@@ -173,6 +190,55 @@ public sealed class FeatureEngine
 
     /// <summary>Developing session POC (Setup 1 T2 "nearest opposing structure").</summary>
     public Price? DevelopingPoc => _profile.Poc;
+
+    /// <summary>Developing volume-by-price profile (Setup 4 D1: LVN proximity + next-HVN room).</summary>
+    public SessionProfile Profile => _profile;
+
+    /// <summary>Setup 5 E1/E2: the latest new-30-minute-high divergence sample (prior swing high
+    /// and new high with their cumDeltas); <see cref="SwingDivergence.Ts"/> equals the triggering
+    /// event so detectors can tell a fresh new high from a stale sample. Null until two highs seen.</summary>
+    public SwingDivergence? LastHighDivergence => _lastHighDiv;
+
+    /// <summary>Setup 5 mirror: the latest new-30-minute-low divergence sample.</summary>
+    public SwingDivergence? LastLowDivergence => _lastLowDiv;
+
+    /// <summary>Setup 5 E2/E4: the forming volume bar (leakage-safe partial bar, rulebook 2.8.2).</summary>
+    public FootprintBar FormingBar => _bars.Forming;
+
+    /// <summary>Setup 2 B3: the value at quantile <paramref name="q"/> of completed session bars'
+    /// aggressive buy (or sell) volume; null until <see cref="FeatureEngineOptions.MinBarSamples"/>
+    /// bars exist.</summary>
+    public long? BarAggressiveVolumeQuantile(bool buySide, double q) =>
+        (buySide ? _barBuyVolDist : _barSellVolDist).Quantile(q);
+
+    /// <summary>Setup 2 B1: a reference high (prior-day or overnight high) that price has swept by
+    /// [minTicks, maxTicks] — i.e. the nearest such level <paramref name="minTicks"/>..maxTicks below
+    /// <paramref name="price"/> (above, for the long mirror's reference lows). v1 approximates the
+    /// rulebook's "swing high ≥ 30 min old" with PDH/ONH only (pivot-age tracking is deferred).</summary>
+    public bool TryGetSweptReference(Price price, bool high, int minTicks, int maxTicks, out Price reference)
+    {
+        reference = Price.Undefined;
+        bool found = false;
+        long best = long.MaxValue;
+        Span<Price> candidates = high
+            ? stackalloc[] { _priorDayHigh, _overnightHigh }
+            : stackalloc[] { _priorDayLow, _overnightLow };
+        foreach (var candidate in candidates)
+        {
+            if (candidate.IsUndefined)
+            {
+                continue;
+            }
+            long ticksBeyond = high ? price.TicksFrom(candidate, _tick) : candidate.TicksFrom(price, _tick);
+            if (ticksBeyond >= minTicks && ticksBeyond <= maxTicks && ticksBeyond < best)
+            {
+                best = ticksBeyond;
+                reference = candidate;
+                found = true;
+            }
+        }
+        return found;
+    }
 
     /// <summary>F34: ATR 5-min percentile vs the trailing day distribution (global filter 3); null without history.</summary>
     public double? AtrPercentile => _sessionDate is { } session ? _atr.Percentile(session) : null;
@@ -296,7 +362,9 @@ public sealed class FeatureEngine
             }
         }
 
-        // F9: new extreme = print strictly beyond the rolling 30-minute high/low.
+        // Setup 5 divergence samples (prior swing extreme + cumDelta vs the new 30-min extreme),
+        // then F9: new extreme = print strictly beyond the rolling 30-minute high/low.
+        UpdateSwingPivots(in e);
         long priceRaw = e.Price.RawNano;
         if (_swingMax.Extreme is { } hi && priceRaw > hi)
         {
@@ -319,6 +387,8 @@ public sealed class FeatureEngine
         if (_bars.OnTrade(e.Price, e.Size, e.Side) is { } completedBar)
         {
             _barDeltaDist.Add(completedBar.Delta);
+            _barBuyVolDist.Add(completedBar.BuyVolume);
+            _barSellVolDist.Add(completedBar.SellVolume);
         }
         if (_sessionDate is { } session)
         {
@@ -346,6 +416,54 @@ public sealed class FeatureEngine
         FillCrossedNakedPocs(e.Price);
 
         _lastTradePrice = e.Price;
+    }
+
+    /// <summary>
+    /// Setup 5 swing-pivot tracking. Each leg's running peak/trough is confirmed as a swing
+    /// extreme only after price pulls back <see cref="FeatureEngineOptions.SwingPullbackTicks"/>
+    /// from it — so a tick-by-tick grind doesn't manufacture a one-tick "swing high" every print.
+    /// While price makes new 30-minute highs above the last confirmed swing high, each print emits
+    /// a fresh divergence sample (H1 = the confirmed swing high, H2 = this print), so the detector
+    /// sees E1 satisfied once the new high is ≥ 2 ticks above it. Mirrored for lows.
+    /// </summary>
+    private void UpdateSwingPivots(in MarketEvent e)
+    {
+        long p = e.Price.RawNano;
+        long pullback = _opts.SwingPullbackTicks * _tick.RawNano;
+
+        if (_swingMax.Extreme is { } hi && p > hi && !_curHigh.IsUndefined)
+        {
+            _lastHighDiv = new SwingDivergence(_curHigh, e.Price, _cumDeltaAtCurHigh, _cumDelta, e.TsEvent);
+        }
+        if (_legHigh.IsUndefined || p > _legHigh.RawNano)
+        {
+            _legHigh = e.Price;
+            _cumDeltaAtLegHigh = _cumDelta;
+        }
+        else if (_legHigh.RawNano - p >= pullback)
+        {
+            _curHigh = _legHigh; // the leg peak is a confirmed swing high once price pulled back
+            _cumDeltaAtCurHigh = _cumDeltaAtLegHigh;
+            _legHigh = e.Price;
+            _cumDeltaAtLegHigh = _cumDelta;
+        }
+
+        if (_swingMin.Extreme is { } lo && p < lo && !_curLow.IsUndefined)
+        {
+            _lastLowDiv = new SwingDivergence(_curLow, e.Price, _cumDeltaAtCurLow, _cumDelta, e.TsEvent);
+        }
+        if (_legLow.IsUndefined || p < _legLow.RawNano)
+        {
+            _legLow = e.Price;
+            _cumDeltaAtLegLow = _cumDelta;
+        }
+        else if (p - _legLow.RawNano >= pullback)
+        {
+            _curLow = _legLow;
+            _cumDeltaAtCurLow = _cumDeltaAtLegLow;
+            _legLow = e.Price;
+            _cumDeltaAtLegLow = _cumDelta;
+        }
     }
 
     /// <summary>F31 fills: any naked POC on the closed price interval between the previous
@@ -414,8 +532,20 @@ public sealed class FeatureEngine
             }
             _sizeDist = _sizeDist.StartNextSession();
             _barDeltaDist = _barDeltaDist.StartNextSession();
+            _barBuyVolDist = _barBuyVolDist.StartNextSession();
+            _barSellVolDist = _barSellVolDist.StartNextSession();
             _cumDelta = 0;
             _extremeDirection = 0;
+            _curHigh = Price.Undefined;
+            _curLow = Price.Undefined;
+            _cumDeltaAtCurHigh = 0;
+            _cumDeltaAtCurLow = 0;
+            _legHigh = Price.Undefined;
+            _legLow = Price.Undefined;
+            _cumDeltaAtLegHigh = 0;
+            _cumDeltaAtLegLow = 0;
+            _lastHighDiv = null;
+            _lastLowDiv = null;
             _runSide = Side.None;
             _runLength = 0;
             _groupSide = Side.None;

@@ -19,6 +19,12 @@ public sealed class FeatureEngineOptions
     /// <summary>F9: swing-extreme lookback (E1's 30-minute extreme).</summary>
     public int SwingWindowSeconds { get; set; } = 1800;
 
+    /// <summary>Setup 5: a swing extreme (the "prior swing high H1") is confirmed only once price
+    /// pulls back this many ticks from a leg's peak — so a continuous tick-by-tick grind isn't a
+    /// sequence of one-tick swing highs. Not a rulebook number (it defines "swing high"); an
+    /// engineering parameter (4 ticks = 1 ES point).</summary>
+    public int SwingPullbackTicks { get; set; } = 4;
+
     /// <summary>Session percentile baselines arm after this many live samples (CLAUDE.md: 200).</summary>
     public int SessionMinSamples { get; set; } = 200;
 

@@ -82,6 +82,14 @@ public sealed class AbsorptionFadeDetector : SetupDetectorBase
 
     public FunnelCounters Funnel;
 
+    public override string? FunnelLine()
+    {
+        var f = Funnel;
+        return $"context {f.ContextEntered:N0} (gave-way {f.ResetDefendedGaveWay:N0}, ran-away {f.ResetPriceRanAway:N0}), " +
+               $"max stall {f.MaxStallNanos / 1_000_000_000.0:F1}s, " +
+               $"A3 {f.A3Passed:N0} → A4 {f.A4Passed:N0} → A5 {f.A5Passed:N0} → candidates {f.Candidates:N0}";
+    }
+
     public AbsorptionFadeDetector(
         TickSize tick,
         Setup1Options options,

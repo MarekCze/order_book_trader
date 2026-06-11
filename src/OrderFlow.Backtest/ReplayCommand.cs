@@ -102,14 +102,9 @@ internal static class ReplayCommand
             {
                 foreach (var detector in entry.Coordinator.Detectors)
                 {
-                    if (detector is AbsorptionFadeDetector afd)
+                    if (detector.FunnelLine() is { } line)
                     {
-                        var f = afd.Funnel;
-                        Console.WriteLine(
-                            $"Funnel [{instrumentId} {afd.Setup} {afd.Direction}]: " +
-                            $"context {f.ContextEntered:N0} (gave-way {f.ResetDefendedGaveWay:N0}, ran-away {f.ResetPriceRanAway:N0}), " +
-                            $"max stall {f.MaxStallNanos / 1_000_000_000.0:F1}s, " +
-                            $"A3 {f.A3Passed:N0} → A4 {f.A4Passed:N0} → A5 {f.A5Passed:N0} → candidates {f.Candidates:N0}");
+                        Console.WriteLine($"Funnel [{instrumentId} {detector.Setup} {detector.Direction}]: {line}");
                     }
                 }
             }

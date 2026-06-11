@@ -157,6 +157,50 @@ public class FootprintFeatureTests
     }
 
     [Fact]
+    public void HasSellImbalanceNear_FindsImbalanceWithinBandOnly()
+    {
+        // sell(5000.00)=30 vs buy(5000.25)=2 → 30 ≥ 3×2 → a sell imbalance at 5000.00
+        var bar = Bar((5000.00m, 2, 30), (5000.25m, 2, 0));
+
+        Assert.True(FootprintFeatures.HasSellImbalanceNear(bar, Tick, Px(5000.25m), withinTicks: 2, ratio: 3.0));
+        Assert.False(FootprintFeatures.HasSellImbalanceNear(bar, Tick, Px(5001.00m), withinTicks: 1, ratio: 3.0));
+    }
+
+    [Fact]
+    public void AggressorVolumeBeyond_SumsBuyVolumeAtOrAboveLevel()
+    {
+        var bar = Bar((5000.00m, 20, 5), (5000.25m, 30, 0), (5000.50m, 10, 0));
+        // buy at or above 5000.25 = 30 + 10 = 40
+        Assert.Equal(40, FootprintFeatures.AggressorVolumeBeyond(bar, Tick, Px(5000.25m), buySide: true, atOrAbove: true));
+        // sell at or below 5000.00 = 5
+        Assert.Equal(5, FootprintFeatures.AggressorVolumeBeyond(bar, Tick, Px(5000.00m), buySide: false, atOrAbove: false));
+    }
+
+    [Fact]
+    public void StackedImbalanceLen_DirectionalSellRun()
+    {
+        // two consecutive sell imbalances near the top, buy side quiet
+        var bar = Bar(
+            (5000.00m, 1, 1),
+            (5000.25m, 1, 30),  // sell imb (sell 30 vs buy@5000.50)
+            (5000.50m, 1, 30),  // sell imb (sell 30 vs buy@5000.75 floored)
+            (5000.75m, 1, 1));
+
+        Assert.Equal(2, FootprintFeatures.StackedImbalanceLen(bar, Tick, ratio: 3.0, sellSide: true));
+        Assert.Equal(0, FootprintFeatures.StackedImbalanceLen(bar, Tick, ratio: 3.0, sellSide: false));
+    }
+
+    [Fact]
+    public void HasBuyImbalanceNear_MirrorsForBuySide()
+    {
+        // buy(5000.25)=30 vs sell(5000.00)=2 → 30 ≥ 3×2 → a buy imbalance at 5000.25
+        var bar = Bar((5000.00m, 0, 2), (5000.25m, 30, 2));
+
+        Assert.True(FootprintFeatures.HasBuyImbalanceNear(bar, Tick, Px(5000.00m), withinTicks: 2, ratio: 3.0));
+        Assert.False(FootprintFeatures.HasBuyImbalanceNear(bar, Tick, Px(4999.00m), withinTicks: 1, ratio: 3.0));
+    }
+
+    [Fact]
     public void PocDrift_OverLastFiveCompletedBars()
     {
         var b = new VolumeBarBuilder(Tick, new FeatureEngineOptions { BarVolumeSize = 10, PocDriftBars = 5 });

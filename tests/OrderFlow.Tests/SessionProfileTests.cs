@@ -91,4 +91,41 @@ public class SessionProfileTests
         Assert.Equal(50, p.VolumeAt(Px(5000.00m)));
         Assert.Equal(55, p.TotalVolume);
     }
+
+    [Fact]
+    public void TryGetNearestLvn_ScansDownwardWithinBudget()
+    {
+        // LVN at the 2-lot middle bin (5000.25).
+        var p = Profile((5000.00m, 40), (5000.25m, 2), (5000.50m, 40));
+
+        Assert.True(p.TryGetNearestLvn(Px(5000.50m), up: false, maxTicks: 3, out var lvn));
+        Assert.Equal(Px(5000.25m), lvn); // 1 tick below the query price
+    }
+
+    [Fact]
+    public void TryGetNearestLvn_ScansUpwardWithinBudget()
+    {
+        var p = Profile((5000.00m, 40), (5000.25m, 2), (5000.50m, 40));
+
+        Assert.True(p.TryGetNearestLvn(Px(5000.00m), up: true, maxTicks: 3, out var lvn));
+        Assert.Equal(Px(5000.25m), lvn);
+    }
+
+    [Fact]
+    public void TryGetNearestLvn_IncludesQueryPriceItself()
+    {
+        var p = Profile((5000.00m, 40), (5000.25m, 2), (5000.50m, 40));
+
+        Assert.True(p.TryGetNearestLvn(Px(5000.25m), up: false, maxTicks: 0, out var lvn));
+        Assert.Equal(Px(5000.25m), lvn);
+    }
+
+    [Fact]
+    public void TryGetNearestLvn_NoneWithinBudget_ReturnsFalse()
+    {
+        var p = Profile((5000.00m, 40), (5000.25m, 2), (5000.50m, 40));
+
+        Assert.False(p.TryGetNearestLvn(Px(5001.00m), up: false, maxTicks: 2, out _)); // LVN is 3 ticks away
+        Assert.False(p.TryGetNearestLvn(Px(5000.50m), up: true, maxTicks: 5, out _));  // nothing above the range
+    }
 }

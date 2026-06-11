@@ -21,6 +21,15 @@ public enum LoiType : byte
 /// <summary>A concrete LOI relative to a query price. Positive distance = price above the LOI.</summary>
 public readonly record struct LoiReference(Price Price, LoiType Type, long SignedDistanceTicks);
 
+/// <summary>
+/// Setup 5 swing-divergence sample: a new 30-minute extreme (<paramref name="NewExtreme"/>)
+/// and the prior swing extreme it followed (<paramref name="PriorExtreme"/>), each tagged with
+/// the session cumulative delta at the moment it printed. <paramref name="Ts"/> is the event
+/// that produced the new extreme, so a detector can distinguish a fresh sample from a stale one.
+/// </summary>
+public readonly record struct SwingDivergence(
+    Price PriorExtreme, Price NewExtreme, long CumDeltaPrior, long CumDeltaNew, Timestamp Ts);
+
 public interface ILoiProvider
 {
     bool TryGetNearest(Price price, TickSize tick, out LoiReference loi);

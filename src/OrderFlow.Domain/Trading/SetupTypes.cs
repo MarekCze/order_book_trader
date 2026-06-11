@@ -42,6 +42,10 @@ public enum ExitReason : byte
     Invalidation = 3,
     TimeStop = 4,
     SessionEnd = 5,
+
+    /// <summary>Setup 2: the trap thesis was wrong (price held back past the level) — exited flat-ish,
+    /// not a level failure, so it counts as Other rather than a stop-out for filter 5.</summary>
+    Scratch = 6,
 }
 
 /// <summary>Final disposition of a candidate that was not blocked outright.</summary>
