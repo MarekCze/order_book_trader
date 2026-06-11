@@ -29,12 +29,17 @@ public enum TradeResult : byte
     Other = 3,
 }
 
-/// <summary>Everything the global filters need to judge one candidate.</summary>
+/// <summary>Everything the global filters need to judge one candidate.
+/// <see cref="AtrPercentile"/> is the regime-ATR percentile (30-min ATR vs the trailing
+/// distribution), sampled at context formation; <see cref="AtrBaselineSessions"/> is how
+/// many distinct sessions that trailing distribution covers — the volatility gate is
+/// disabled (pass-through) until it reaches <see cref="RiskOptions.MinBaselineSessions"/>.</summary>
 public readonly record struct CandidateContext(
     Timestamp Ts,
     long LevelKey,
     long? LoiDistanceTicks,
     double? AtrPercentile,
+    int AtrBaselineSessions,
     bool NewsWindow,
     long? SpreadTicks,
     long StopDistanceTicks);
@@ -53,10 +58,20 @@ public sealed class RiskOptions
     /// <summary>Filter 2: max ticks from a pre-marked LOI (rulebook: 4).</summary>
     public int LoiProximityTicks { get; set; } = 4;
 
-    /// <summary>Filter 3: ATR percentile band vs the trailing distribution (rulebook: [20th, 95th]).</summary>
+    /// <summary>Filter 3: regime-ATR percentile band vs the trailing distribution (rulebook: [20th, 95th]).</summary>
     public double AtrPercentileMin { get; set; } = 0.20;
 
     public double AtrPercentileMax { get; set; } = 0.95;
+
+    /// <summary>Filter 3 (redesign): sample the regime ATR at context formation rather than
+    /// at the signal trigger, so a volatility burst the setup is reacting to does not push
+    /// the reading out of band. False reverts to trigger-time sampling.</summary>
+    public bool AtrSampleAtContext { get; set; } = true;
+
+    /// <summary>Filter 3 (redesign): the volatility gate stays disabled (pass-through, logged)
+    /// until the trailing regime-ATR baseline covers at least this many distinct sessions.
+    /// Below it the percentile is statistically meaningless, so blocking on it is noise.</summary>
+    public int MinBaselineSessions { get; set; } = 10;
 
     /// <summary>Filter 4: required spread in ticks at signal time (rulebook: exactly 1).</summary>
     public int RequiredSpreadTicks { get; set; } = 1;
@@ -98,6 +113,11 @@ public sealed class RiskManager
     /// "one position at a time" treats a working entry as exposure.</summary>
     public bool Exposed => _exposed;
 
+    /// <summary>How many candidates were approved through a disabled (pass-through) volatility
+    /// gate because the regime baseline had &lt; MinBaselineSessions sessions. Diagnostic only
+    /// (the "logged" half of the redesign) — surfaced by the backtest CLI.</summary>
+    public long VolGatePassThroughCount { get; private set; }
+
     public RiskVerdict Evaluate(in CandidateContext ctx)
     {
         // 1 — session: RTH only, skip the first minutes after the open and news windows.
@@ -113,9 +133,16 @@ public sealed class RiskManager
             return new RiskVerdict(RiskBlock.Location, 0);
         }
 
-        // 3 — volatility: dead market or news-driven market. Unknown percentile (not
-        // enough stored days) blocks — detectors stay disabled until baselines exist.
-        if (ctx.AtrPercentile is not { } atr || atr < _opts.AtrPercentileMin || atr > _opts.AtrPercentileMax)
+        // 3 — volatility regime gate (redesign): use the regime ATR (30-min, sampled at
+        // context formation) ranked against the trailing distribution. Until that
+        // distribution covers MinBaselineSessions sessions the percentile is meaningless,
+        // so the gate is disabled entirely (pass-through, counted). Once established, a
+        // dead/overheated regime (percentile outside the band, or unknown) blocks.
+        if (ctx.AtrBaselineSessions < _opts.MinBaselineSessions)
+        {
+            VolGatePassThroughCount++;
+        }
+        else if (ctx.AtrPercentile is not { } atr || atr < _opts.AtrPercentileMin || atr > _opts.AtrPercentileMax)
         {
             return new RiskVerdict(RiskBlock.Volatility, 0);
         }

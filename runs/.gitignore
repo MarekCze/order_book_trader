@@ -1,0 +1,6 @@
+# Run artifacts (journals, CSVs, generated reports) are reproducible — keep them out of git.
+*.db
+*.db-*
+*.csv
+*.parquet
+artifacts/

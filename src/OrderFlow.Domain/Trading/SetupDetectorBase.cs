@@ -85,6 +85,19 @@ public abstract class SetupDetectorBase
     /// <summary>Exit reason carried by a pending market exit until its fill arrives.</summary>
     protected ExitReason PendingExitReason { get; set; }
 
+    // ----- regime volatility gate inputs, sampled when context forms (filter 3 redesign) -----
+    private double? _contextAtrPercentile;
+    private int _contextAtrBaselineSessions;
+
+    /// <summary>Capture the regime ATR (30-min, vs trailing distribution) at the moment a
+    /// detector's context forms, so the volatility gate judges the regime that produced the
+    /// setup rather than the signal burst at the trigger. Call on the Idle→ContextMet edge.</summary>
+    protected void SampleVolatilityRegime(FeatureEngine features)
+    {
+        _contextAtrPercentile = features.RegimeAtrPercentile;
+        _contextAtrBaselineSessions = features.RegimeAtrBaselineSessions;
+    }
+
     public void OnEvent(in MarketEvent e, BookStateTracker tracker, FeatureEngine features)
     {
         if (e.Kind is not (MarketEventKind.BookChanged or MarketEventKind.Trade))
@@ -136,11 +149,16 @@ public abstract class SetupDetectorBase
             ? loi.SignedDistanceTicks
             : null;
         long? spread = tracker.TryGetSpreadTicks(Tick, out var s) ? s : null;
+        // Regime gate (filter 3 redesign): use the context-sampled regime ATR by default;
+        // AtrSampleAtContext=false reverts to a live read at the trigger.
+        double? atrPercentile = RiskOpts.AtrSampleAtContext ? _contextAtrPercentile : features.RegimeAtrPercentile;
+        int atrBaselineSessions = RiskOpts.AtrSampleAtContext ? _contextAtrBaselineSessions : features.RegimeAtrBaselineSessions;
         var ctx = new CandidateContext(
             Ts: e.TsEvent,
             LevelKey: Level.RawNano,
             LoiDistanceTicks: loiDistance,
-            AtrPercentile: features.AtrPercentile,
+            AtrPercentile: atrPercentile,
+            AtrBaselineSessions: atrBaselineSessions,
             NewsWindow: features.IsNewsWindow(e.TsEvent),
             SpreadTicks: spread,
             StopDistanceTicks: stopDistanceTicks);

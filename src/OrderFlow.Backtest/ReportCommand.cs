@@ -18,7 +18,16 @@ internal static class ReportCommand
             Console.Error.WriteLine($"Journal not found: {journalPath}");
             return 1;
         }
-        var options = AppOptions.Load();
+        AppOptions options;
+        try
+        {
+            options = AppOptions.Load(basePath: null, overrides: CliArgs.GetAll(rest, "--set"));
+        }
+        catch (ArgumentException ex)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
         string mdPath = CliArgs.GetOption(rest, "--out") ?? journalPath + ".report.md";
         string csvDir = CliArgs.GetOption(rest, "--csv-dir") ?? journalPath + ".report";
         string title = CliArgs.GetOption(rest, "--title") ?? $"{options.Instrument.Symbol} Backtest Report";

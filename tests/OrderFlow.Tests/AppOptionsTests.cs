@@ -34,6 +34,38 @@ public class AppOptionsTests
     }
 
     [Fact]
+    public void Load_Overrides_TakePrecedenceOverJsonAndDefaults()
+    {
+        var dir = Directory.CreateTempSubdirectory("orderflow-options-");
+        try
+        {
+            File.WriteAllText(Path.Combine(dir.FullName, "appsettings.json"),
+                """
+                { "Detectors": { "Setup1": { "StopOffsetTicks": 3 } } }
+                """);
+
+            var options = AppOptions.Load(dir.FullName, new[]
+            {
+                "Detectors:Setup1:StopOffsetTicks=7", // overrides the JSON value
+                "Risk.TickValue=10.0",                // '.' separator also accepted, overrides default
+            });
+
+            Assert.Equal(7, options.Detectors.Setup1.StopOffsetTicks);
+            Assert.Equal(10.0m, options.Risk.TickValue);
+        }
+        finally
+        {
+            dir.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Load_Override_WithoutEquals_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => AppOptions.Load(null, new[] { "Detectors:Setup1:StopOffsetTicks" }));
+    }
+
+    [Fact]
     public void Load_WithoutFeatureSection_KeepsDefaults()
     {
         var dir = Directory.CreateTempSubdirectory("orderflow-options-");
