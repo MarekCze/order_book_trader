@@ -165,6 +165,7 @@ public sealed class StopRunFadeDetector : SetupDetectorBase
         _sweepFrozen = false;
         _maxBeyondSweepTicks = 0;
         _contextEntered++;
+        SampleVolatilityRegime(features);
         State = SetupState.ContextMet;
     }
 

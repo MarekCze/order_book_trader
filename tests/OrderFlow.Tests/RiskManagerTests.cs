@@ -26,6 +26,7 @@ public class RiskManagerTests
         LevelKey: Level,
         LoiDistanceTicks: 1,
         AtrPercentile: 0.50,
+        AtrBaselineSessions: 20, // baseline established → the band applies
         NewsWindow: false,
         SpreadTicks: 1,
         StopDistanceTicks: 4);
@@ -72,7 +73,7 @@ public class RiskManagerTests
     // ----- filter 3: volatility -----
 
     [Fact]
-    public void Blocks_AtrOutsideBand_OrUnknown()
+    public void Blocks_AtrOutsideBand_OrUnknown_WhenBaselineEstablished()
     {
         var risk = NewRisk();
         Assert.Equal(RiskBlock.Volatility, risk.Evaluate(Ok() with { AtrPercentile = 0.10 }).Block);
@@ -80,6 +81,27 @@ public class RiskManagerTests
         Assert.Equal(RiskBlock.Volatility, risk.Evaluate(Ok() with { AtrPercentile = null }).Block);
         Assert.True(risk.Evaluate(Ok() with { AtrPercentile = 0.20 }).Approved);
         Assert.True(risk.Evaluate(Ok() with { AtrPercentile = 0.95 }).Approved);
+    }
+
+    [Fact]
+    public void VolatilityGate_PassesThrough_WhenBaselineBelowMinSessions()
+    {
+        var risk = NewRisk(); // MinBaselineSessions default 10
+        // Fewer than 10 sessions of baseline → the gate is disabled entirely: even a
+        // null or out-of-band percentile is approved (it would otherwise block).
+        Assert.True(risk.Evaluate(Ok() with { AtrBaselineSessions = 9, AtrPercentile = null }).Approved);
+        Assert.True(risk.Evaluate(Ok() with { AtrBaselineSessions = 0, AtrPercentile = 0.99 }).Approved);
+        Assert.True(risk.Evaluate(Ok() with { AtrBaselineSessions = 9, AtrPercentile = 0.01 }).Approved);
+        Assert.Equal(3, risk.VolGatePassThroughCount);
+    }
+
+    [Fact]
+    public void VolatilityGate_AppliesBand_AtOrAboveMinSessions()
+    {
+        var risk = NewRisk();
+        // Exactly at the threshold the gate switches on.
+        Assert.Equal(RiskBlock.Volatility, risk.Evaluate(Ok() with { AtrBaselineSessions = 10, AtrPercentile = null }).Block);
+        Assert.True(risk.Evaluate(Ok() with { AtrBaselineSessions = 10, AtrPercentile = 0.50 }).Approved);
     }
 
     // ----- filter 4: spread -----

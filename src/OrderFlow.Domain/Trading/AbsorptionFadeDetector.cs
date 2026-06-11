@@ -222,6 +222,7 @@ public sealed class AbsorptionFadeDetector : SetupDetectorBase
         _bucketVolume.Clear();
         _bucketFavorableDelta.Clear();
         Funnel.ContextEntered++;
+        SampleVolatilityRegime(features);
         State = SetupState.ContextMet;
     }
 

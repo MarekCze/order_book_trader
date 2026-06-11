@@ -3,31 +3,44 @@ using OrderFlow.Domain.Sessions;
 
 namespace OrderFlow.Domain.Features;
 
+/// <summary>Named ATR series held side by side in the history store. The 5-minute series
+/// backs F34; the regime series (30-minute) backs the volatility filter's regime gate.</summary>
+public static class AtrSeries
+{
+    public const string FiveMin = "atr5";
+    public const string Regime = "atr30";
+}
+
+/// <summary>Tunable shape of one ATR series (bar width, SMA period, baseline lookback).</summary>
+public readonly record struct AtrConfig(int BarSeconds, int PeriodBars, int LookbackDays, int MinDays);
+
 /// <summary>
-/// F34's multi-day ATR history (CLAUDE.md: cross-session state persists in SQLite; the
-/// adapter lives in Infrastructure). Implementations must return samples in insertion
-/// order — deterministic.
+/// Multi-day ATR history (CLAUDE.md: cross-session state persists in SQLite; the adapter
+/// lives in Infrastructure). Samples are keyed by series so several ATR definitions can
+/// coexist. Implementations must return samples in insertion order — deterministic. The
+/// <c>series</c> parameter defaults to the 5-minute series so existing callers are unaffected.
 /// </summary>
 public interface IAtrHistoryStore
 {
-    void AddSample(DateOnly sessionDate, double atrPoints);
+    void AddSample(DateOnly sessionDate, double atrPoints, string series = AtrSeries.FiveMin);
 
-    IReadOnlyList<double> SamplesSince(DateOnly fromInclusive);
+    IReadOnlyList<double> SamplesSince(DateOnly fromInclusive, string series = AtrSeries.FiveMin);
 
-    int DistinctDaysSince(DateOnly fromInclusive);
+    int DistinctDaysSince(DateOnly fromInclusive, string series = AtrSeries.FiveMin);
 }
 
 public sealed class InMemoryAtrHistoryStore : IAtrHistoryStore
 {
-    private readonly List<(DateOnly Date, double Atr)> _samples = new();
+    private readonly List<(DateOnly Date, double Atr, string Series)> _samples = new();
 
-    public void AddSample(DateOnly sessionDate, double atrPoints) => _samples.Add((sessionDate, atrPoints));
+    public void AddSample(DateOnly sessionDate, double atrPoints, string series = AtrSeries.FiveMin) =>
+        _samples.Add((sessionDate, atrPoints, series));
 
-    public IReadOnlyList<double> SamplesSince(DateOnly fromInclusive) =>
-        _samples.Where(s => s.Date >= fromInclusive).Select(s => s.Atr).ToArray();
+    public IReadOnlyList<double> SamplesSince(DateOnly fromInclusive, string series = AtrSeries.FiveMin) =>
+        _samples.Where(s => s.Series == series && s.Date >= fromInclusive).Select(s => s.Atr).ToArray();
 
-    public int DistinctDaysSince(DateOnly fromInclusive) =>
-        _samples.Where(s => s.Date >= fromInclusive).Select(s => s.Date).Distinct().Count();
+    public int DistinctDaysSince(DateOnly fromInclusive, string series = AtrSeries.FiveMin) =>
+        _samples.Where(s => s.Series == series && s.Date >= fromInclusive).Select(s => s.Date).Distinct().Count();
 }
 
 /// <summary>
@@ -40,8 +53,9 @@ public sealed class InMemoryAtrHistoryStore : IAtrHistoryStore
 /// </summary>
 public sealed class AtrTracker
 {
-    private readonly FeatureEngineOptions _opts;
+    private readonly AtrConfig _cfg;
     private readonly IAtrHistoryStore _store;
+    private readonly string _series;
     private readonly Queue<double> _trueRanges = new();
     private long _barIndex = long.MinValue;
     private Price _high = Price.Undefined;
@@ -49,18 +63,47 @@ public sealed class AtrTracker
     private Price _close = Price.Undefined;
     private Price _prevClose = Price.Undefined;
 
-    public AtrTracker(FeatureEngineOptions options, IAtrHistoryStore store)
+    public AtrTracker(AtrConfig config, IAtrHistoryStore store, string series = AtrSeries.FiveMin)
     {
-        _opts = options;
+        _cfg = config;
         _store = store;
+        _series = series;
+    }
+
+    /// <summary>Convenience overload: build the 5-minute (F34) series from the engine options.</summary>
+    public AtrTracker(FeatureEngineOptions options, IAtrHistoryStore store)
+        : this(new AtrConfig(options.AtrBarSeconds, options.AtrPeriodBars, options.AtrLookbackDays, options.AtrMinDays), store)
+    {
     }
 
     public double? CurrentAtrPoints =>
-        _trueRanges.Count >= _opts.AtrPeriodBars ? _trueRanges.Average() : null;
+        _trueRanges.Count >= _cfg.PeriodBars ? _trueRanges.Average() : null;
+
+    /// <summary>Distinct sessions the trailing baseline covers (for the regime gate's
+    /// pass-through decision). Includes today once it has recorded a sample.</summary>
+    public int BaselineSessions(DateOnly currentSession) =>
+        _store.DistinctDaysSince(currentSession.AddDays(-_cfg.LookbackDays), _series);
+
+    /// <summary>Percentile rank of the current ATR over the trailing baseline, WITHOUT the
+    /// min-days gate — the caller (regime volatility gate) decides readiness via
+    /// <see cref="BaselineSessions"/>. Null only when the ATR or samples don't yet exist.</summary>
+    public double? PercentileUngated(DateOnly currentSession)
+    {
+        if (CurrentAtrPoints is not { } atr)
+        {
+            return null;
+        }
+        var samples = _store.SamplesSince(currentSession.AddDays(-_cfg.LookbackDays), _series);
+        if (samples.Count == 0)
+        {
+            return null;
+        }
+        return (double)samples.Count(s => s <= atr) / samples.Count;
+    }
 
     public void OnTrade(Timestamp ts, Price price, DateOnly sessionDate)
     {
-        long barIndex = (long)(ts.UnixNanos / 1_000_000_000UL) / _opts.AtrBarSeconds;
+        long barIndex = (long)(ts.UnixNanos / 1_000_000_000UL) / _cfg.BarSeconds;
         if (barIndex != _barIndex)
         {
             CloseBar(sessionDate);
@@ -96,12 +139,12 @@ public sealed class AtrTracker
         {
             return null;
         }
-        var from = currentSession.AddDays(-_opts.AtrLookbackDays);
-        if (_store.DistinctDaysSince(from) < _opts.AtrMinDays)
+        var from = currentSession.AddDays(-_cfg.LookbackDays);
+        if (_store.DistinctDaysSince(from, _series) < _cfg.MinDays)
         {
             return null;
         }
-        var samples = _store.SamplesSince(from);
+        var samples = _store.SamplesSince(from, _series);
         if (samples.Count == 0)
         {
             return null;
@@ -125,14 +168,14 @@ public sealed class AtrTracker
             tr = Math.Max(tr, Math.Max(Math.Abs(high - prevClose), Math.Abs(low - prevClose)));
         }
         _trueRanges.Enqueue(tr);
-        while (_trueRanges.Count > _opts.AtrPeriodBars)
+        while (_trueRanges.Count > _cfg.PeriodBars)
         {
             _trueRanges.Dequeue();
         }
         _prevClose = _close;
         if (CurrentAtrPoints is { } atr)
         {
-            _store.AddSample(sessionDate, atr);
+            _store.AddSample(sessionDate, atr, _series);
         }
     }
 }

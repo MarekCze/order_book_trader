@@ -116,6 +116,12 @@ internal static class ReplayCommand
                         Console.WriteLine($"Funnel [{instrumentId} {detector.Setup} {detector.Direction}]: {line}");
                     }
                 }
+                if (entry.Coordinator.VolGatePassThroughCount > 0)
+                {
+                    Console.WriteLine(
+                        $"Vol gate [{instrumentId}]: DISABLED (pass-through) for {entry.Coordinator.VolGatePassThroughCount:N0} candidates " +
+                        "— regime ATR baseline < MinBaselineSessions.");
+                }
             }
             TradeSummaryPrinter.Print(Console.Out, journalPath);
             Console.WriteLine($"Journal:  {journalPath}");

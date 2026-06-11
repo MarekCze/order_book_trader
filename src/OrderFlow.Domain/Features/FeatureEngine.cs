@@ -51,6 +51,7 @@ public sealed class FeatureEngine
     private readonly LiquidityDynamicsTracker _liquidity;
     private readonly INakedPocStore _nakedPocs;
     private readonly AtrTracker _atr;
+    private readonly AtrTracker _regimeAtr;
     private readonly SessionLevelsLoiProvider _sessionLevels = new();
     private readonly Timestamp[] _newsTimes;
     private VolumeBarBuilder _bars;
@@ -114,7 +115,14 @@ public sealed class FeatureEngine
         _tick = tick;
         _opts = options;
         _nakedPocs = nakedPocStore ?? new InMemoryNakedPocStore();
-        _atr = new AtrTracker(options, atrHistoryStore ?? new InMemoryAtrHistoryStore());
+        var atrStore = atrHistoryStore ?? new InMemoryAtrHistoryStore();
+        _atr = new AtrTracker(options, atrStore);
+        // Regime gate (filter 3 redesign): a 30-min ATR series ranked vs its own trailing
+        // distribution. MinDays = 1 here — readiness for the gate is decided by the risk
+        // filter's MinBaselineSessions, not by this tracker.
+        _regimeAtr = new AtrTracker(
+            new AtrConfig(options.RegimeAtrBarSeconds, options.RegimeAtrPeriodBars, options.RegimeAtrLookbackDays, MinDays: 1),
+            atrStore, AtrSeries.Regime);
         _profile = new SessionProfile(tick, options);
         _bars = new VolumeBarBuilder(tick, options);
         _barDeltaDist = new SessionDistribution(
@@ -242,6 +250,13 @@ public sealed class FeatureEngine
 
     /// <summary>F34: ATR 5-min percentile vs the trailing day distribution (global filter 3); null without history.</summary>
     public double? AtrPercentile => _sessionDate is { } session ? _atr.Percentile(session) : null;
+
+    /// <summary>Regime volatility gate input: percentile of the current 30-min regime ATR
+    /// against its trailing distribution (ungated — the risk filter decides readiness).</summary>
+    public double? RegimeAtrPercentile => _sessionDate is { } session ? _regimeAtr.PercentileUngated(session) : null;
+
+    /// <summary>Regime volatility gate input: distinct sessions the regime baseline covers.</summary>
+    public int RegimeAtrBaselineSessions => _sessionDate is { } session ? _regimeAtr.BaselineSessions(session) : 0;
 
     /// <summary>F36 source: true within the configured window of a scheduled release (global filter 1).</summary>
     public bool IsNewsWindow(Timestamp ts) =>
@@ -393,6 +408,7 @@ public sealed class FeatureEngine
         if (_sessionDate is { } session)
         {
             _atr.OnTrade(e.TsEvent, e.Price, session);
+            _regimeAtr.OnTrade(e.TsEvent, e.Price, session);
         }
         if (_sessionHigh.IsUndefined || e.Price > _sessionHigh)
         {
@@ -552,6 +568,7 @@ public sealed class FeatureEngine
             _groupPriceCount = 0;
             _liquidity.Reset();
             _atr.OnSessionRollover();
+            _regimeAtr.OnSessionRollover();
 
             // The finished session's structure becomes context for the new one.
             _priorDayHigh = _sessionHigh;

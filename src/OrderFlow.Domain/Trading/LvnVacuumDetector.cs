@@ -153,6 +153,7 @@ public sealed class LvnVacuumDetector : SetupDetectorBase
         if (State != SetupState.ContextMet)
         {
             _contextEntered++;
+            SampleVolatilityRegime(features);
         }
         Level = lvn;
         _hvn = hvn;

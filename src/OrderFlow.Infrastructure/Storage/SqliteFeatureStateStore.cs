@@ -34,10 +34,24 @@ public sealed class SqliteFeatureStateStore : INakedPocStore, IAtrHistoryStore, 
             CREATE TABLE IF NOT EXISTS atr_samples (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_date TEXT NOT NULL,
-                atr_points REAL NOT NULL
+                atr_points REAL NOT NULL,
+                series TEXT NOT NULL DEFAULT 'atr5'
             );
             """;
         create.ExecuteNonQuery();
+        // Migration for stores created before the regime-ATR series column existed.
+        using (var migrate = _connection.CreateCommand())
+        {
+            migrate.CommandText = "ALTER TABLE atr_samples ADD COLUMN series TEXT NOT NULL DEFAULT 'atr5'";
+            try
+            {
+                migrate.ExecuteNonQuery();
+            }
+            catch (SqliteException)
+            {
+                // Column already present — nothing to do.
+            }
+        }
         LoadActiveCache();
     }
 
@@ -70,22 +84,24 @@ public sealed class SqliteFeatureStateStore : INakedPocStore, IAtrHistoryStore, 
 
     // ----- IAtrHistoryStore -----
 
-    public void AddSample(DateOnly sessionDate, double atrPoints)
+    public void AddSample(DateOnly sessionDate, double atrPoints, string series = AtrSeries.FiveMin)
     {
         using var cmd = _connection.CreateCommand();
         cmd.CommandText =
-            "INSERT INTO atr_samples (session_date, atr_points) VALUES ($date, $atr)";
+            "INSERT INTO atr_samples (session_date, atr_points, series) VALUES ($date, $atr, $series)";
         cmd.Parameters.AddWithValue("$date", Iso(sessionDate));
         cmd.Parameters.AddWithValue("$atr", atrPoints);
+        cmd.Parameters.AddWithValue("$series", series);
         cmd.ExecuteNonQuery();
     }
 
-    public IReadOnlyList<double> SamplesSince(DateOnly fromInclusive)
+    public IReadOnlyList<double> SamplesSince(DateOnly fromInclusive, string series = AtrSeries.FiveMin)
     {
         using var cmd = _connection.CreateCommand();
         cmd.CommandText =
-            "SELECT atr_points FROM atr_samples WHERE session_date >= $from ORDER BY id";
+            "SELECT atr_points FROM atr_samples WHERE session_date >= $from AND series = $series ORDER BY id";
         cmd.Parameters.AddWithValue("$from", Iso(fromInclusive));
+        cmd.Parameters.AddWithValue("$series", series);
         using var reader = cmd.ExecuteReader();
         var samples = new List<double>();
         while (reader.Read())
@@ -95,12 +111,13 @@ public sealed class SqliteFeatureStateStore : INakedPocStore, IAtrHistoryStore, 
         return samples;
     }
 
-    public int DistinctDaysSince(DateOnly fromInclusive)
+    public int DistinctDaysSince(DateOnly fromInclusive, string series = AtrSeries.FiveMin)
     {
         using var cmd = _connection.CreateCommand();
         cmd.CommandText =
-            "SELECT COUNT(DISTINCT session_date) FROM atr_samples WHERE session_date >= $from";
+            "SELECT COUNT(DISTINCT session_date) FROM atr_samples WHERE session_date >= $from AND series = $series";
         cmd.Parameters.AddWithValue("$from", Iso(fromInclusive));
+        cmd.Parameters.AddWithValue("$series", series);
         return Convert.ToInt32(cmd.ExecuteScalar());
     }
 

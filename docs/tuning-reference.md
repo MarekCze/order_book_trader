@@ -51,8 +51,10 @@ These gate **every** candidate from every setup before entry.
 |---|---|---|
 | `OpenExcludeMinutes` | 2 | Filter 1: minutes after the RTH open with no trading. |
 | `LoiProximityTicks` | 4 | Filter 2: max ticks from a level of interest. |
-| `AtrPercentileMin` | 0.20 | Filter 3: lower edge of the 5-min ATR percentile band vs the trailing distribution. |
+| `AtrPercentileMin` | 0.20 | Filter 3: lower edge of the regime-ATR percentile band vs the trailing distribution. |
 | `AtrPercentileMax` | 0.95 | Filter 3: upper edge of the ATR band. |
+| `AtrSampleAtContext` | true | Filter 3: sample the regime ATR at context formation, not at the signal trigger (decouples the gate from the burst the setup reacts to). |
+| `MinBaselineSessions` | 10 | Filter 3: gate stays disabled (pass-through, logged) until the trailing regime-ATR baseline covers this many sessions. |
 | `RequiredSpreadTicks` | 1 | Filter 4: required spread (ticks) at signal time. |
 | `MaxAttemptsPerLoi` | 3 | Filter 5: max attempts per LOI per session. |
 | `ConsecutiveStopOutsToKillLevel` | 2 | Filter 5: consecutive stop-outs that kill a level for the day. |
@@ -171,3 +173,11 @@ Mostly affect what is computed/journalled rather than entry/exit, but a few are 
 by detectors. See `OrderFlow.Domain.Features.FeatureEngineOptions` for the full list (e.g.
 `FlowWindowsSeconds`, `DepthImbalanceLevels`, `SwingPullbackTicks`, `SessionMinSamples`).
 `SwingPullbackTicks` in particular defines Setup 5's "swing high/low".
+
+The **regime volatility gate** (filter 3) reads its own ATR series here:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `RegimeAtrBarSeconds` | 1800 | Bar width of the 30-min regime ATR (separate from F34's 5-min ATR). |
+| `RegimeAtrPeriodBars` | 14 | True ranges averaged into the regime ATR. |
+| `RegimeAtrLookbackDays` | 20 | Trailing window the regime-ATR percentile ranks against. |

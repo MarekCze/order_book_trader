@@ -169,6 +169,7 @@ public sealed class DeltaDivergenceFadeDetector : SetupDetectorBase
         Level = _h2;
         _contextTs = e.TsEvent;
         _contextEntered++;
+        SampleVolatilityRegime(features);
         State = SetupState.ContextMet;
         TryTrigger(in e, tracker, features); // E4 may already hold this event
     }

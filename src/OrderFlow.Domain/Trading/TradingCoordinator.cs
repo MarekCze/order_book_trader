@@ -90,6 +90,11 @@ public sealed class TradingCoordinator : IFillListener
 
     public IReadOnlyList<SetupDetectorBase> Detectors => _detectors;
 
+    /// <summary>Candidates approved through a disabled (pass-through) volatility gate because
+    /// the regime baseline was below MinBaselineSessions — the "logged" half of the filter-3
+    /// redesign, surfaced by the backtest CLI.</summary>
+    public long VolGatePassThroughCount => _risk.VolGatePassThroughCount;
+
     public void OnEvent(in MarketEvent e, BookStateTracker tracker)
     {
         if (e.Kind is not (MarketEventKind.BookChanged or MarketEventKind.Trade))

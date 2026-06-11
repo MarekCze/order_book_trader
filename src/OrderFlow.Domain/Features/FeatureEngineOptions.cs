@@ -101,6 +101,16 @@ public sealed class FeatureEngineOptions
     /// <summary>F34: distinct days of history required before the percentile answers.</summary>
     public int AtrMinDays { get; set; } = 5;
 
+    /// <summary>Regime gate (filter 3 redesign): ATR bar width for the volatility regime
+    /// series — 30 minutes, decoupled from the 5-min signal-burst ATR (F34 keeps its own).</summary>
+    public int RegimeAtrBarSeconds { get; set; } = 1800;
+
+    /// <summary>Regime gate: true ranges averaged into the regime ATR.</summary>
+    public int RegimeAtrPeriodBars { get; set; } = 14;
+
+    /// <summary>Regime gate: percentile lookback (trailing 20-day distribution).</summary>
+    public int RegimeAtrLookbackDays { get; set; } = 20;
+
     /// <summary>F36: half-width of the news window (rulebook: ±10 minutes).</summary>
     public int NewsWindowMinutes { get; set; } = 10;
 
