@@ -132,3 +132,37 @@ iteration-1 commit (`16102cc`) are both reachable from `origin/main` (merged via
 **Not touched (per plan item 4):** Setup 5 geometry (offsets, breakeven, T1/T2) and all
 detector thresholds are unchanged; the S1/S4 threshold-scaling sweep (item 3) waits for
 the funnel re-run on real data.
+
+---
+
+## Funnel telemetry on the REAL week (2026-06-11, resolves the blocked iteration-2 audits)
+
+Ran the iteration-2 per-condition telemetry (PR #10) on the real ES week (default config,
+chained state) — the run the iteration-2 session could not do (no DBN files there). Week
+report reproduces RUN A2 byte-for-byte: **16 trades, 5W/11L, −$6,161.50** → confirms PR #10
+added telemetry only, zero behaviour change. Per-condition passed/evaluated (chain order),
+representative day; pattern holds all 5 days:
+
+```
+S1 AbsorptionFade : A1 → A2rdy → A2 → A3 → A4 0/N → A5 0/0 → A6 0/0   (A4 is an absolute wall)
+S2 StopRunFade    : B1B2 → B3 (~1% pass) → B4 (all pass) → B5 ~0/N    (B3 climax, then B5 supply)
+S4 LvnVacuum      : D1lvn → D1room → D2 0/N → D3 0/0                  (D2 is an absolute wall)
+S5 DeltaDivFade   : E1 (most pass) → E2 (~10% pass) → E3 → E4 → trades (works; E2 is the filter)
+```
+
+**Binding constraints (the answer to "why are S1/S4 silent"):**
+- **Setup 1 — `A4` (volume-without-progress, `StallVolumeMultiple`=3×) passes 0 of thousands
+  of A3-stall events, every day, both sides.** A3 produces plenty of stalls; none carry 3×
+  baseline volume at [L, L+1]. (Day 5 also shows A3 0/N — `StallSeconds`=45 vs ~15–24 s max
+  stalls that day — but A4 is the dominant wall.)
+- **Setup 4 — `D2` (depth-decline `DepthDeclineFraction`=0.40 + `PullRatioMin`=1.5) passes
+  0 of hundreds of thousands to millions, every day.** D1 (LVN proximity + HVN room) fires
+  constantly; the cancel/pull signal never reaches threshold.
+- **Setup 2 —** `B3` (climax ≥ 90th pctl) filters ~99%, then `B5` (supply confirmation)
+  takes nearly all the rest → ~1 candidate all week.
+- **Setup 5 —** the only setup that trades; `E2` (cum-delta / non-confirming-bar divergence)
+  is the selective filter (~10% pass), E1/E3/E4 are permissive.
+
+**Directly sets up item 4** (S1/S4 threshold-scaling sweep): the factors should scale
+**S1 `StallVolumeMultiple`** (the A4 wall) and **S4 `DepthDeclineFraction` + `PullRatioMin`**
+(the D2 wall) at ×1.0/0.8/0.6/0.4 and watch the A4 / D2 passed counts begin to lift.
