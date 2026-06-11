@@ -26,8 +26,11 @@ static int Usage()
               journal (default <file>.journal.db, recreated each run), printing a trading
               summary; --export-csv/--export-parquet export the journal tables; --report dir
               writes the M6 markdown report + CSVs (report.md + report/ inside dir).
+              --set Key=Value (repeatable) overrides any config value for this run without
+              editing appsettings.json, e.g. --set Detectors:Setup1:StopOffsetTicks=4
+              --set Risk.AtrPercentileMax=0.99 (':' or '.' path separators; for parameter sweeps).
 
-          orderflow report <journal.db> [--out report.md] [--csv-dir dir] [--title "..."]
+          orderflow report <journal.db> [--out report.md] [--csv-dir dir] [--title "..."] [--set K=V]
               Compute the M6 backtest report from an existing journal: per-setup expectancy
               net of costs, hit rate, MAE/MFE distributions, invalidation-vs-stop exit
               breakdown and equity curve. Writes a markdown report and CSV side-files
@@ -56,6 +59,20 @@ namespace OrderFlow.Backtest
         }
 
         public static bool HasFlag(string[] args, string name) => args.Contains(name);
+
+        /// <summary>All values following each occurrence of a repeatable option (e.g. --set).</summary>
+        public static List<string> GetAll(string[] args, string name)
+        {
+            var values = new List<string>();
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == name)
+                {
+                    values.Add(args[i + 1]);
+                }
+            }
+            return values;
+        }
 
         public static decimal? GetDecimal(string[] args, string name) =>
             GetOption(args, name) is { } s ? decimal.Parse(s, CultureInfo.InvariantCulture) : null;

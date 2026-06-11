@@ -18,7 +18,16 @@ internal static class ReplayCommand
             Console.Error.WriteLine($"File not found: {path}");
             return 1;
         }
-        var options = AppOptions.Load();
+        AppOptions options;
+        try
+        {
+            options = AppOptions.Load(basePath: null, overrides: CliArgs.GetAll(rest, "--set"));
+        }
+        catch (ArgumentException ex)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
         decimal tickDecimal = CliArgs.GetDecimal(rest, "--tick-size") ?? options.Instrument.TickSize;
         var tick = TickSize.FromDecimal(tickDecimal);
 
