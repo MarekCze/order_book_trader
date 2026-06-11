@@ -135,6 +135,52 @@ public sealed class FeatureEngine
     /// <summary>Session cumulative delta (aggressive buys − sells), reset at the Globex roll.</summary>
     public long CumDelta => _cumDelta;
 
+    // ----- M4 detector query surface -----
+    // Detectors run per event and cannot afford ComputeSnapshot(); these are the O(1)/O(log n)
+    // point queries the setups need. All read the same state the snapshot reads.
+
+    /// <summary>Index of a configured flow window by its length in seconds (detector options
+    /// reference windows in seconds; the ring is indexed).</summary>
+    public int FlowWindowIndex(int seconds)
+    {
+        int idx = Array.IndexOf(_opts.FlowWindowsSeconds, seconds);
+        return idx >= 0
+            ? idx
+            : throw new ArgumentException(
+                $"No configured flow window of {seconds}s (Features:FlowWindowsSeconds = [{string.Join(", ", _opts.FlowWindowsSeconds)}]).");
+    }
+
+    /// <summary>F8 raw: signed aggressor volume over the indexed window.</summary>
+    public long WindowDelta(int windowIndex) => _ring.WindowSum(windowIndex).Delta;
+
+    /// <summary>True once the windowed-delta session distribution can answer percentile queries
+    /// (CLAUDE.md: 200 live samples, or the prior session's final distribution).</summary>
+    public bool DeltaDistributionReady(int windowIndex) => _deltaDist[windowIndex].IsReady;
+
+    /// <summary>Fraction of session delta samples ≤ <paramref name="delta"/>; null until ready.</summary>
+    public double? DeltaPercentileRank(int windowIndex, long delta) =>
+        _deltaDist[windowIndex].PercentileRank(delta);
+
+    /// <summary>F6 source: nearest LOI to a price (A1/B1/C2/D1/E3, global filter 2).</summary>
+    public bool TryGetNearestLoi(Price price, out LoiReference loi) =>
+        _loi.TryGetNearest(price, _tick, out loi);
+
+    /// <summary>A4 denominator: mean per-price volume over the trailing baseline window (15 min).</summary>
+    public double? BaselinePerPriceVolume => _baselineVolume.MeanPerPriceVolume;
+
+    /// <summary>Per-price liquidity queries (A5/A-invalidation: ReplenishRatio, RefreshCount, VanishFlag).</summary>
+    public LiquidityDynamicsTracker Liquidity => _liquidity;
+
+    /// <summary>Developing session POC (Setup 1 T2 "nearest opposing structure").</summary>
+    public Price? DevelopingPoc => _profile.Poc;
+
+    /// <summary>F34: ATR 5-min percentile vs the trailing day distribution (global filter 3); null without history.</summary>
+    public double? AtrPercentile => _sessionDate is { } session ? _atr.Percentile(session) : null;
+
+    /// <summary>F36 source: true within the configured window of a scheduled release (global filter 1).</summary>
+    public bool IsNewsWindow(Timestamp ts) =>
+        TimeContextFeatures.NewsWindowFlag(ts, _newsTimes, _opts.NewsWindowMinutes);
+
     public void OnEvent(in MarketEvent e, BookStateTracker tracker)
     {
         _lastTs = e.TsEvent;

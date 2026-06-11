@@ -1,11 +1,12 @@
 using Microsoft.Extensions.Configuration;
 using OrderFlow.Domain.Features;
+using OrderFlow.Domain.Trading;
 
 namespace OrderFlow.Infrastructure.Config;
 
 /// <summary>
 /// Typed configuration root. Per CLAUDE.md every rulebook threshold must live here
-/// (appsettings.json), never as a literal in code — detector options arrive in M4+.
+/// (appsettings.json), never as a literal in code.
 /// </summary>
 public sealed class AppOptions
 {
@@ -13,6 +14,9 @@ public sealed class AppOptions
     public PipelineOptions Pipeline { get; set; } = new();
     public FeatureEngineOptions Features { get; set; } = new();
     public StorageOptions Storage { get; set; } = new();
+    public RiskOptions Risk { get; set; } = new();
+    public ExecutionOptions Execution { get; set; } = new();
+    public TradingOptions Detectors { get; set; } = new();
 
     public static AppOptions Load(string? basePath = null)
     {

@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using OrderFlow.Application.Pipeline;
 using OrderFlow.Domain.Primitives;
+using OrderFlow.Domain.Trading;
 using OrderFlow.Infrastructure.Config;
 using OrderFlow.Infrastructure.Dbn;
+using OrderFlow.Infrastructure.Journal;
 using OrderFlow.Infrastructure.Storage;
 
 namespace OrderFlow.Backtest;
@@ -23,9 +25,13 @@ internal static class ReplayCommand
         var source = new DbnFileMarketEventSource(path);
         var stage = new BookStateTrackerStage();
         var stats = new StatsCollector(tick);
+        bool withTrade = CliArgs.HasFlag(rest, "--trade");
+        bool withFeatures = CliArgs.HasFlag(rest, "--features") || withTrade;
         FeatureEngineStage? features = null;
+        TradingStage? trading = null;
+        SqliteCandidateJournal? journal = null;
+        string journalPath = CliArgs.GetOption(rest, "--journal") ?? path + ".journal.db";
         IBookEventObserver observer = stats;
-        bool withFeatures = CliArgs.HasFlag(rest, "--features");
         // Empty SqlitePath = ephemeral in-memory state, keeping repeated replays of the
         // same file byte-identical.
         using var store = withFeatures && !string.IsNullOrWhiteSpace(options.Storage.SqlitePath)
@@ -35,6 +41,27 @@ internal static class ReplayCommand
         {
             features = new FeatureEngineStage(tick, options.Features, nakedPocStore: store, atrHistoryStore: store);
             observer = new CompositeBookEventObserver(stats, features);
+        }
+        if (withTrade)
+        {
+            // The journal is a per-run derived artifact: start it fresh so a re-run of the
+            // same file produces an identical database.
+            if (File.Exists(journalPath))
+            {
+                File.Delete(journalPath);
+            }
+            journal = new SqliteCandidateJournal(journalPath, options.Features);
+            trading = new TradingStage(features!, (engine, nextCandidateId) =>
+            {
+                var simulator = new FillSimulator(tick, options.Execution);
+                var coordinator = new TradingCoordinator(
+                    tick, options.Detectors, options.Risk, options.Execution,
+                    simulator, journal, engine, nextCandidateId);
+                simulator.Listener = coordinator;
+                return (coordinator, simulator);
+            });
+            // Order matters: features must ingest each event before detectors query them.
+            observer = new CompositeBookEventObserver(stats, features!, trading);
         }
 
         // Wall-clock time is allowed here ONLY for throughput measurement (CLI host);
@@ -49,6 +76,10 @@ internal static class ReplayCommand
             Console.Error.WriteLine($"DBN format error: {ex.Message}");
             return 1;
         }
+        finally
+        {
+            journal?.Dispose();
+        }
         sw.Stop();
 
         var md = source.Metadata!;
@@ -60,9 +91,42 @@ internal static class ReplayCommand
         Console.WriteLine();
         stats.Print(Console.Out, stage);
         Console.WriteLine();
-        if (features is not null)
+        if (features is not null && CliArgs.HasFlag(rest, "--features"))
         {
             FeatureSnapshotPrinter.Print(Console.Out, features, options.Features);
+            Console.WriteLine();
+        }
+        if (withTrade)
+        {
+            foreach (var (instrumentId, entry) in trading!.Instruments)
+            {
+                foreach (var detector in entry.Coordinator.Detectors)
+                {
+                    if (detector is AbsorptionFadeDetector afd)
+                    {
+                        var f = afd.Funnel;
+                        Console.WriteLine(
+                            $"Funnel [{instrumentId} {afd.Setup} {afd.Direction}]: " +
+                            $"context {f.ContextEntered:N0} (gave-way {f.ResetDefendedGaveWay:N0}, ran-away {f.ResetPriceRanAway:N0}), " +
+                            $"max stall {f.MaxStallNanos / 1_000_000_000.0:F1}s, " +
+                            $"A3 {f.A3Passed:N0} → A4 {f.A4Passed:N0} → A5 {f.A5Passed:N0} → candidates {f.Candidates:N0}");
+                    }
+                }
+            }
+            TradeSummaryPrinter.Print(Console.Out, journalPath);
+            Console.WriteLine($"Journal:  {journalPath}");
+            if (CliArgs.GetOption(rest, "--export-csv") is { } csvDir)
+            {
+                Directory.CreateDirectory(csvDir);
+                JournalExporter.ExportCsv(journalPath, csvDir);
+                Console.WriteLine($"CSV:      {csvDir}");
+            }
+            if (CliArgs.GetOption(rest, "--export-parquet") is { } parquetDir)
+            {
+                Directory.CreateDirectory(parquetDir);
+                await JournalExporter.ExportParquetAsync(journalPath, parquetDir);
+                Console.WriteLine($"Parquet:  {parquetDir}");
+            }
             Console.WriteLine();
         }
 
