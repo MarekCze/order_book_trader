@@ -52,7 +52,15 @@ public sealed class DeltaDivergenceFadeDetector : SetupDetectorBase
     private long _contextEntered;
     private long _candidates;
 
-    public override string? FunnelLine() => $"context {_contextEntered:N0} → candidates {_candidates:N0}";
+    private const int E1 = 0, E2 = 1, E3 = 2, E4 = 3;
+
+    /// <summary>Per-condition funnel telemetry (diagnostic only). E1's evaluated count is
+    /// the number of fresh new-30-min-extreme samples seen while Idle; E4's is the events
+    /// spent waiting in ContextMet.</summary>
+    public ConditionFunnel Conditions { get; } = new("E1", "E2", "E3", "E4");
+
+    public override string? FunnelLine() =>
+        $"context {_contextEntered:N0} → candidates {_candidates:N0} | {Conditions.Summary()}";
 
     public DeltaDivergenceFadeDetector(
         TickSize tick,
@@ -144,7 +152,7 @@ public sealed class DeltaDivergenceFadeDetector : SetupDetectorBase
         long extensionTicks = Direction == TradeDirection.Short
             ? d.NewExtreme.TicksFrom(d.PriorExtreme, Tick)
             : d.PriorExtreme.TicksFrom(d.NewExtreme, Tick);
-        if (!Setup5Guards.E1_NewExtremeBeyondPrior(extensionTicks, _o))
+        if (!Conditions.Check(E1, Setup5Guards.E1_NewExtremeBeyondPrior(extensionTicks, _o)))
         {
             return;
         }
@@ -153,13 +161,13 @@ public sealed class DeltaDivergenceFadeDetector : SetupDetectorBase
         var bar = features.FormingBar;
         bool barDeltaNonConfirming = Sign * bar.Delta >= 0;
         double directionalRangePos = DirectionalRangePos(bar);
-        if (!Setup5Guards.E2_Divergence(cumDeltaGap, barDeltaNonConfirming, directionalRangePos, _o))
+        if (!Conditions.Check(E2, Setup5Guards.E2_Divergence(cumDeltaGap, barDeltaNonConfirming, directionalRangePos, _o)))
         {
             return;
         }
 
         long? loiDistance = features.TryGetNearestLoi(d.NewExtreme, out var loi) ? loi.SignedDistanceTicks : null;
-        if (!Setup5Guards.E3_Location(loiDistance, _o))
+        if (!Conditions.Check(E3, Setup5Guards.E3_Location(loiDistance, _o)))
         {
             return;
         }
@@ -202,7 +210,7 @@ public sealed class DeltaDivergenceFadeDetector : SetupDetectorBase
         bool reclaimed = !_lastTradePrice.IsUndefined && (Direction == TradeDirection.Short
             ? _lastTradePrice.RawNano < _h1.RawNano
             : _lastTradePrice.RawNano > _h1.RawNano);
-        if (!Setup5Guards.E4_Trigger(imbalance, reclaimed))
+        if (!Conditions.Check(E4, Setup5Guards.E4_Trigger(imbalance, reclaimed)))
         {
             return;
         }

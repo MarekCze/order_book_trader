@@ -46,7 +46,16 @@ public sealed class LvnVacuumDetector : SetupDetectorBase
     private long _contextEntered;
     private long _candidates;
 
-    public override string? FunnelLine() => $"context {_contextEntered:N0} → candidates {_candidates:N0}";
+    private const int D1Lvn = 0, D1Room = 1, D2 = 2, D3 = 3;
+
+    /// <summary>Per-condition funnel telemetry (diagnostic only). D1 is split into its two
+    /// halves — "an LVN (with a next HVN) is within proximity" and "room to pay" — because
+    /// the first can silence the setup without the rulebook threshold ever being tested.
+    /// Evaluated counts are per event (this detector re-checks context continuously).</summary>
+    public ConditionFunnel Conditions { get; } = new("D1lvn", "D1room", "D2", "D3");
+
+    public override string? FunnelLine() =>
+        $"context {_contextEntered:N0} → candidates {_candidates:N0} | {Conditions.Summary()}";
 
     public LvnVacuumDetector(
         TickSize tick,
@@ -131,9 +140,12 @@ public sealed class LvnVacuumDetector : SetupDetectorBase
     private void StepContext(in MarketEvent e, BookStateTracker tracker, FeatureEngine features)
     {
         // D1: an LVN within proximity in the trade direction, with room to the next HVN.
-        if (_lastTradePrice.IsUndefined
-            || !features.Profile.TryGetNearestLvn(_lastTradePrice, ContinuationUp, _o.LvnProximityTicks, out var lvn)
-            || features.Profile.NextHvn(lvn, ContinuationUp) is not { } hvn)
+        Price lvn = Price.Undefined;
+        Price? hvnFound = null;
+        bool lvnNear = !_lastTradePrice.IsUndefined
+            && features.Profile.TryGetNearestLvn(_lastTradePrice, ContinuationUp, _o.LvnProximityTicks, out lvn)
+            && (hvnFound = features.Profile.NextHvn(lvn, ContinuationUp)) is not null;
+        if (!Conditions.Check(D1Lvn, lvnNear))
         {
             if (State == SetupState.ContextMet)
             {
@@ -141,8 +153,9 @@ public sealed class LvnVacuumDetector : SetupDetectorBase
             }
             return;
         }
+        var hvn = hvnFound!.Value;
         long lvnToHvnTicks = Math.Abs(hvn.TicksFrom(lvn, Tick));
-        if (!LvnVacuumGuards.D1_RoomToPay(lvnToHvnTicks, _o))
+        if (!Conditions.Check(D1Room, LvnVacuumGuards.D1_RoomToPay(lvnToHvnTicks, _o)))
         {
             if (State == SetupState.ContextMet)
             {
@@ -164,14 +177,14 @@ public sealed class LvnVacuumDetector : SetupDetectorBase
         {
             _deltaWindowIdx = features.FlowWindowIndex(_o.DeltaWindowSeconds);
         }
-        if (!LvnVacuumGuards.D2_Pulling(
+        if (!Conditions.Check(D2, LvnVacuumGuards.D2_Pulling(
                 features.Liquidity.DepthChangeBeyondBest(PullSide),
-                features.Liquidity.PullRatio(PullSide, _deltaWindowIdx), _o))
+                features.Liquidity.PullRatio(PullSide, _deltaWindowIdx), _o)))
         {
             return;
         }
         long directionalDelta = Sign * features.WindowDelta(_deltaWindowIdx);
-        if (!LvnVacuumGuards.D3_AggressorAlignment(directionalDelta, _o))
+        if (!Conditions.Check(D3, LvnVacuumGuards.D3_AggressorAlignment(directionalDelta, _o)))
         {
             return;
         }

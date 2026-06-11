@@ -191,6 +191,21 @@ public class StopRunFadeDetectorTests
     }
 
     [Fact]
+    public void Funnel_CountsTheConditionChain_ThroughArm()
+    {
+        var h = new Harness();
+        h.Arm();
+        var c = h.Detector.Conditions;
+        Assert.True(c.Passed("B1B2") >= 1);
+        Assert.True(c.Passed("B3") >= 1);
+        Assert.True(c.Passed("B4") >= 1);
+        Assert.Equal(1, c.Passed("B5"));
+        // B5 was evaluated on every in-context event before the third imbalance stacked.
+        Assert.True(c.Evaluated("B5") > c.Passed("B5"));
+        Assert.Contains("B1B2", h.Detector.FunnelLine());
+    }
+
+    [Fact]
     public void Context_Resets_OnFollowThroughBeyondSweep()
     {
         var h = new Harness();

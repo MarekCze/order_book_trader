@@ -75,3 +75,60 @@ tradeable candidates (S1/S4 ~0 contexts, S2 1 expired) — motivates item 4's S1
 **Observations for later (not acted on — diagnostics only):** every exit is a stop; no trade
 reached T2; Setup 5 short dominates (14 of 16). Suggests T1/stop geometry and Setup-5
 selectivity are the next things to look at after the funnel telemetry (item 2) exists.
+
+---
+
+## Iteration 2 — detector validation tooling (2026-06-11)
+
+**What landed (code, no journal schema change, no detector behavior change):**
+
+1. **Per-condition funnel telemetry** (iteration 1's item 2, now the critical path): a
+   shared `ConditionFunnel` records passed/evaluated per rulebook condition, in chain
+   order, for every detector instance — S1 `A1 → A2rdy → A2 → A3 → A4 → A5 → A6` (A2rdy =
+   the session delta-distribution readiness gate, counted separately because it silences
+   the setup without any rulebook condition failing), S2 `B1B2 → B3 → B4 → B5`, S4
+   `D1lvn → D1room → D2 → D3` (D1 split so "no LVN near" is distinguishable from "no room
+   to the HVN"), S5 `E1 → E2 → E3 → E4`. Printed in the replay funnel lines; because
+   guards short-circuit, the first condition whose passed count collapses is the binding
+   constraint.
+2. **`orderflow inspect-trade <journal.db> <id> [--data file.dbn.zst]`** (item 2b tooling):
+   prints the journaled row, the full F1–F36 snapshot at trigger, and the Setup-5 E1–E4
+   journal evidence; with `--data` it replays the file and reconstructs the
+   detector-internal context the journal does not carry — H1/H2 swing sample with
+   cumDeltas, E1–E4 verdicts at context/trigger, swing/divergence-sample counts, and a
+   ±60 s price/delta path in 10 s buckets around the entry.
+3. **Swing-pivot counters** (item 2c): the feature engine counts confirmed swing
+   highs/lows; replay prints `Swings [instr]: confirmed highs N, lows N
+   (Features:SwingPullbackTicks=4)`. The value in effect is the default **4 ticks**
+   (appsettings; never overridden in any run so far).
+
+**Synthetic shakeout** (8M-event `synth` file, ~37 min of RTH): telemetry immediately
+attributes the silence per setup — S1 dies at **A3** (0/17,901 — no 45 s stall on the
+synthetic walk), S2 at **B3** (0/243 climax), S4 at **D2** (0/96,472 pulling), while S5
+filters genuinely: `E1 72/89 → E2 23/72 → E3 21/23 → E4 12/211` → 12 candidates (all
+blocked on Spread — the synthetic book is wide). Journals remain byte-identical across
+re-runs (sha256-verified).
+
+**Blocked in this environment — needs the data restored:** the container has no DBN files,
+no `DATABENTO_API_KEY`, and the RUN A2 journals were ephemeral. The following audit steps
+from the iteration-2 plan are specified but NOT yet executed:
+
+- **(2a)** MAE/MFE distributions for the 16 RUN A2 trades, split by T1-reached, plus
+  time-in-trade and price-path class. After re-running RUN A2 (same commands as above):
+  `SELECT t1_filled, COUNT(*), AVG(mae_ticks), AVG(mfe_ticks) FROM candidates WHERE
+  disposition='Traded' GROUP BY t1_filled;` then per-trade
+  `inspect-trade j-<dd>.db <id> --data <day>.mbp-10.dbn.zst` for the path class.
+- **(2b)** written audit of 5 randomly sampled S5 trades (E1/E2/E3 human verdicts) — the
+  `inspect-trade --data` output is designed to answer exactly this per trade.
+- **(2c)** swings per session on the real week — read the new `Swings [...]` line from
+  each day's replay; flag if it is tens per session.
+- The funnel-telemetry week re-run (why S1/S2/S4 are silent on REAL data, and whether
+  S5's conditions filter or pass everything) — read the funnel lines from the RUN A2
+  command set; no config delta needed.
+
+**Confirmed (item 5):** the orphaned `--set`/tuning-reference commit (`f27fd79`) and the
+iteration-1 commit (`16102cc`) are both reachable from `origin/main` (merged via PR #8).
+
+**Not touched (per plan item 4):** Setup 5 geometry (offsets, breakeven, T1/T2) and all
+detector thresholds are unchanged; the S1/S4 threshold-scaling sweep (item 3) waits for
+the funnel re-run on real data.

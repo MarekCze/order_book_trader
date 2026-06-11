@@ -38,6 +38,14 @@ orderflow replay ES.dbn.zst --trade --set Detectors:Setup5:Enabled=false
 
 A malformed override (no `=`) aborts the run with a clear error before any work starts.
 
+**Reading a sweep:** `replay --trade` prints per-condition funnel telemetry for every
+detector instance — `A1 passed/evaluated → A2rdy → A2 → …` in chain order. Because guards
+short-circuit, a condition's evaluated count is the number of events that survived
+everything before it, so the first condition whose passed count collapses is the binding
+constraint. `orderflow inspect-trade <journal.db> <id> [--data file.dbn.zst]` audits a
+single journaled candidate (feature snapshot, Setup-5 E1–E4 evidence and reconstruction,
+±60 s price path).
+
 All values default to the rulebook; directions are stated for the long side — the short
 mirror flips signs, not thresholds.
 
