@@ -64,7 +64,10 @@ Options:
 - `--trade` (M4) — additionally run the setup detectors (Setup 1 absorption fade, long +
   short) against the fill simulator with global risk filters 1–6, and write the candidate
   journal (SQLite; default `<file>.journal.db`, recreated each run, override with
-  `--journal path`). Prints a per-detector signal funnel and a trading summary.
+  `--journal path`). Prints a per-detector signal funnel — including per-condition
+  telemetry (`A1 passed/evaluated → A2rdy → … `) showing which rulebook condition is the
+  binding constraint — a swing-pivot count line (`Features:SwingPullbackTicks`
+  diagnostics for Setup 5), and a trading summary.
   `--export-csv dir` / `--export-parquet dir` export the journal tables. Notes:
   - The ATR volatility filter (global filter 3) needs ≥ 5 distinct days of ATR history in
     `Storage:SqlitePath` — on a cold single-file run every candidate is blocked as
@@ -75,6 +78,11 @@ Options:
     ≥ 3× the 15-minute per-price baseline) is the binding constraint, then A5
     (replenish ratio ≥ 2.5). The funnel line shows where the chain stops; thresholds are
     config (`Detectors:Setup1`), stated by the rulebook as starting parameters to falsify.
+  - To audit a single journaled candidate afterwards, use
+    `inspect-trade <journal.db> <id> [--data <file.dbn.zst>]` — it prints the row, the full
+    feature snapshot at trigger, and (Setup 5) the E1–E4 evidence; with `--data` it replays
+    the file to reconstruct the swing-divergence context (H1/H2, per-condition verdicts)
+    and a ±60 s price/delta path around the entry.
 
 Expected output shape:
 

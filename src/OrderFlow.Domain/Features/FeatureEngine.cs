@@ -210,6 +210,14 @@ public sealed class FeatureEngine
     /// <summary>Setup 5 mirror: the latest new-30-minute-low divergence sample.</summary>
     public SwingDivergence? LastLowDivergence => _lastLowDiv;
 
+    /// <summary>Diagnostic: swing highs confirmed by the SwingPullbackTicks rule over this
+    /// engine's lifetime (one replayed file ≈ one session) — how many "swings" the
+    /// configured pullback actually produces. Never read by trading logic.</summary>
+    public long ConfirmedSwingHighs { get; private set; }
+
+    /// <summary>Diagnostic mirror of <see cref="ConfirmedSwingHighs"/> for swing lows.</summary>
+    public long ConfirmedSwingLows { get; private set; }
+
     /// <summary>Setup 5 E2/E4: the forming volume bar (leakage-safe partial bar, rulebook 2.8.2).</summary>
     public FootprintBar FormingBar => _bars.Forming;
 
@@ -462,6 +470,7 @@ public sealed class FeatureEngine
             _cumDeltaAtCurHigh = _cumDeltaAtLegHigh;
             _legHigh = e.Price;
             _cumDeltaAtLegHigh = _cumDelta;
+            ConfirmedSwingHighs++;
         }
 
         if (_swingMin.Extreme is { } lo && p < lo && !_curLow.IsUndefined)
@@ -479,6 +488,7 @@ public sealed class FeatureEngine
             _cumDeltaAtCurLow = _cumDeltaAtLegLow;
             _legLow = e.Price;
             _cumDeltaAtLegLow = _cumDelta;
+            ConfirmedSwingLows++;
         }
     }
 

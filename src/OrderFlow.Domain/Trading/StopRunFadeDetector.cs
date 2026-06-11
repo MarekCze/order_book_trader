@@ -54,7 +54,16 @@ public sealed class StopRunFadeDetector : SetupDetectorBase
     private long _contextEntered;
     private long _candidates;
 
-    public override string? FunnelLine() => $"context {_contextEntered:N0} → candidates {_candidates:N0}";
+    private const int B1B2 = 0, B3 = 1, B4 = 2, B5 = 3;
+
+    /// <summary>Per-condition funnel telemetry (diagnostic only). B1B2 is the swept-reference
+    /// query (a reference level exists AND price poked it by 1–5 ticks), evaluated per trade
+    /// event while Idle; B4/B5 are evaluated per event while ContextMet (the pre-candidate
+    /// chain only — the post-arm B4 cancel check is not counted).</summary>
+    public ConditionFunnel Conditions { get; } = new("B1B2", "B3", "B4", "B5");
+
+    public override string? FunnelLine() =>
+        $"context {_contextEntered:N0} → candidates {_candidates:N0} | {Conditions.Summary()}";
 
     public StopRunFadeDetector(
         TickSize tick,
@@ -144,16 +153,18 @@ public sealed class StopRunFadeDetector : SetupDetectorBase
 
     private void TryEnterContext(in MarketEvent e, BookStateTracker tracker, FeatureEngine features)
     {
-        if (!features.TryGetSweptReference(e.Price, High, _o.SweepZoneMinTicks, _o.SweepZoneMaxTicks, out var h))
+        // B1 + B2: a reference level exists and price swept it within the zone.
+        if (!Conditions.Check(B1B2, features.TryGetSweptReference(
+                e.Price, High, _o.SweepZoneMinTicks, _o.SweepZoneMaxTicks, out var h)))
         {
-            return; // B1 + B2
+            return;
         }
 
         var bar = features.FormingBar;
         long barAggressive = High ? bar.BuyVolume : bar.SellVolume;
         long? volumeP90 = features.BarAggressiveVolumeQuantile(buySide: High, _o.ClimaxVolumePercentile);
         long volumeBeyond = FootprintFeatures.AggressorVolumeBeyond(bar, Tick, h, buySide: High, atOrAbove: High);
-        if (!Setup2Guards.B3_Climax(barAggressive, volumeP90, volumeBeyond, barAggressive, _o))
+        if (!Conditions.Check(B3, Setup2Guards.B3_Climax(barAggressive, volumeP90, volumeBeyond, barAggressive, _o)))
         {
             return;
         }
@@ -183,7 +194,7 @@ public sealed class StopRunFadeDetector : SetupDetectorBase
         {
             TrackSweep(e.Price);
         }
-        if (!Setup2Guards.B4_NoFollowThrough(_maxBeyondSweepTicks, _o))
+        if (!Conditions.Check(B4, Setup2Guards.B4_NoFollowThrough(_maxBeyondSweepTicks, _o)))
         {
             ResetToIdle(); // follow-through — a continuation, not a trap
             return;
@@ -191,7 +202,8 @@ public sealed class StopRunFadeDetector : SetupDetectorBase
 
         int stackedLen = FootprintFeatures.StackedImbalanceLen(
             features.FormingBar, Tick, _o.ImbalanceRatio, sellSide: High);
-        if (!Setup2Guards.B5_SupplyConfirms(features.Liquidity.DepthChangeBeyondBest(SupplySide), stackedLen, _o))
+        if (!Conditions.Check(B5, Setup2Guards.B5_SupplyConfirms(
+                features.Liquidity.DepthChangeBeyondBest(SupplySide), stackedLen, _o)))
         {
             return;
         }

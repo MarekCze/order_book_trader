@@ -193,6 +193,21 @@ public class LvnVacuumDetectorTests
     }
 
     [Fact]
+    public void Funnel_CountsTheConditionChain_ThroughArm()
+    {
+        var h = new Harness();
+        h.Arm();
+        var c = h.Detector.Conditions;
+        Assert.True(c.Passed("D1lvn") >= 1);
+        Assert.True(c.Passed("D1room") >= 1);
+        Assert.Equal(1, c.Passed("D2"));
+        Assert.Equal(1, c.Passed("D3"));
+        // The profile has no LVN until enough volume builds — D1lvn must show failures.
+        Assert.True(c.Evaluated("D1lvn") > c.Passed("D1lvn"));
+        Assert.Contains("D1lvn", h.Detector.FunnelLine());
+    }
+
+    [Fact]
     public void Arm_PlacesEntryStopBelowLvn_AndJournalsCandidate()
     {
         var h = new Harness();

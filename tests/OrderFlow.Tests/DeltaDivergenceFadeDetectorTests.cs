@@ -253,6 +253,39 @@ public class DeltaDivergenceFadeDetectorTests
     }
 
     [Fact]
+    public void Funnel_CountsTheConditionChain()
+    {
+        var h = new Harness();
+        h.Arm();
+        var c = h.Detector.Conditions;
+        // One fresh new-extreme sample (t65) passes E1–E3; E4 is evaluated at t65 (fails —
+        // no imbalance, no reclaim yet) and at the t70 reclaim (passes).
+        Assert.Equal(1, c.Evaluated("E1"));
+        Assert.Equal(1, c.Passed("E1"));
+        Assert.Equal(1, c.Passed("E2"));
+        Assert.Equal(1, c.Passed("E3"));
+        Assert.Equal(2, c.Evaluated("E4"));
+        Assert.Equal(1, c.Passed("E4"));
+        Assert.Contains("E1 1/1", h.Detector.FunnelLine());
+    }
+
+    [Fact]
+    public void Funnel_AttributesTheBindingConstraint_WhenLocationFails()
+    {
+        // Same scenario, but the LOI proximity is too tight for the 5000.00 round number
+        // to count — E3 becomes the binding constraint and no context forms.
+        var h = new Harness(opts: new Setup5Options { LocationProximityTicks = -1 });
+        h.Arm();
+        Assert.Equal(SetupState.Idle, h.Detector.State);
+        var c = h.Detector.Conditions;
+        Assert.Equal(1, c.Passed("E1"));
+        Assert.Equal(1, c.Passed("E2"));
+        Assert.Equal(1, c.Evaluated("E3"));
+        Assert.Equal(0, c.Passed("E3"));
+        Assert.Equal(0, c.Evaluated("E4"));
+    }
+
+    [Fact]
     public void LongMirror_ArmsWithBuyLimitInsideTheLow()
     {
         var h = new Harness(direction: TradeDirection.Long);

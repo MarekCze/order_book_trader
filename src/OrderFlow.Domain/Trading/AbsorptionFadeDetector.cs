@@ -65,30 +65,24 @@ public sealed class AbsorptionFadeDetector : SetupDetectorBase
     private Timestamp _sweepTs;
     private long _sweepVolumeThroughLevel;
 
-    /// <summary>Funnel counters for calibration/diagnostics (printed by the backtest CLI):
-    /// how often context was entered, how far the signal-guard chain got, and the longest
-    /// stall achieved. Not used by any trading logic.</summary>
-    public struct FunnelCounters
-    {
-        public long ContextEntered;
-        public long ResetDefendedGaveWay;
-        public long ResetPriceRanAway;
-        public long A3Passed;
-        public long A4Passed;
-        public long A5Passed;
-        public long Candidates;
-        public long MaxStallNanos;
-    }
+    // Funnel diagnostics (printed by the backtest CLI, never read by trading logic).
+    private long _contextEntered;
+    private long _resetDefendedGaveWay;
+    private long _resetPriceRanAway;
+    private long _candidates;
+    private long _maxStallNanos;
 
-    public FunnelCounters Funnel;
+    private const int A1 = 0, A2Ready = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5, A6 = 6;
 
-    public override string? FunnelLine()
-    {
-        var f = Funnel;
-        return $"context {f.ContextEntered:N0} (gave-way {f.ResetDefendedGaveWay:N0}, ran-away {f.ResetPriceRanAway:N0}), " +
-               $"max stall {f.MaxStallNanos / 1_000_000_000.0:F1}s, " +
-               $"A3 {f.A3Passed:N0} → A4 {f.A4Passed:N0} → A5 {f.A5Passed:N0} → candidates {f.Candidates:N0}";
-    }
+    /// <summary>Per-condition funnel telemetry (diagnostic only). A1's evaluated count is
+    /// the trade events seen while Idle; A2rdy is the session delta distribution being
+    /// ready (CLAUDE.md baseline gate), counted separately from A2 because an unready
+    /// baseline silences the setup without any rulebook condition failing.</summary>
+    public ConditionFunnel Conditions { get; } = new("A1", "A2rdy", "A2", "A3", "A4", "A5", "A6");
+
+    public override string? FunnelLine() =>
+        $"context {_contextEntered:N0} (gave-way {_resetDefendedGaveWay:N0}, ran-away {_resetPriceRanAway:N0}), " +
+        $"max stall {_maxStallNanos / 1_000_000_000.0:F1}s → candidates {_candidates:N0} | {Conditions.Summary()}";
 
     public AbsorptionFadeDetector(
         TickSize tick,
@@ -190,11 +184,8 @@ public sealed class AbsorptionFadeDetector : SetupDetectorBase
         long declineTicks = _priceExtreme.Extreme is { } extreme
             ? Sign * (extreme - e.Price.RawNano) / Tick.RawNano
             : 0;
-        if (!features.TryGetNearestLoi(e.Price, out var loi))
-        {
-            return;
-        }
-        if (!AbsorptionGuards.A1_DeclineIntoLevel(declineTicks, loi.SignedDistanceTicks, _o))
+        long? loiDistance = features.TryGetNearestLoi(e.Price, out var loi) ? loi.SignedDistanceTicks : null;
+        if (!Conditions.Check(A1, AbsorptionGuards.A1_DeclineIntoLevel(declineTicks, loiDistance, _o)))
         {
             return;
         }
@@ -203,14 +194,15 @@ public sealed class AbsorptionFadeDetector : SetupDetectorBase
         {
             _deltaWindowIdx = features.FlowWindowIndex(_o.DeltaWindowSeconds);
         }
-        if (!features.DeltaDistributionReady(_deltaWindowIdx))
+        // CLAUDE.md: no arming before the session baseline is ready.
+        if (!Conditions.Check(A2Ready, features.DeltaDistributionReady(_deltaWindowIdx)))
         {
-            return; // CLAUDE.md: no arming before the session baseline is ready
+            return;
         }
         long delta = features.WindowDelta(_deltaWindowIdx);
         double? rank = features.DeltaPercentileRank(_deltaWindowIdx, delta);
         double? tailRank = rank is { } r ? (Direction == TradeDirection.Long ? r : 1 - r) : null;
-        if (!AbsorptionGuards.A2_AggressiveFlow(Sign * delta, tailRank, _o))
+        if (!Conditions.Check(A2, AbsorptionGuards.A2_AggressiveFlow(Sign * delta, tailRank, _o)))
         {
             return;
         }
@@ -221,7 +213,7 @@ public sealed class AbsorptionFadeDetector : SetupDetectorBase
         _stallVolumeAtLevel = 0;
         _bucketVolume.Clear();
         _bucketFavorableDelta.Clear();
-        Funnel.ContextEntered++;
+        _contextEntered++;
         SampleVolatilityRegime(features);
         State = SetupState.ContextMet;
     }
@@ -234,14 +226,14 @@ public sealed class AbsorptionFadeDetector : SetupDetectorBase
         if (!tracker.TryGetBest(DefendedSide, out var best)
             || Sign * (best.Price.RawNano - Level.RawNano) < 0)
         {
-            Funnel.ResetDefendedGaveWay++;
+            _resetDefendedGaveWay++;
             ResetToIdle();
             return;
         }
         if (e.Kind == MarketEventKind.Trade
             && Sign * (e.Price.RawNano - Level.RawNano) / Tick.RawNano > _o.StallAbandonTicks)
         {
-            Funnel.ResetPriceRanAway++;
+            _resetPriceRanAway++;
             ResetToIdle();
             return;
         }
@@ -271,24 +263,22 @@ public sealed class AbsorptionFadeDetector : SetupDetectorBase
         }
 
         // Signal conditions A3–A6, all required.
-        Funnel.MaxStallNanos = Math.Max(Funnel.MaxStallNanos, stallNanos);
-        if (!AbsorptionGuards.A3_PriceStalls(stallNanos, _stallAggressorPrints, _o))
+        _maxStallNanos = Math.Max(_maxStallNanos, stallNanos);
+        if (!Conditions.Check(A3, AbsorptionGuards.A3_PriceStalls(stallNanos, _stallAggressorPrints, _o)))
         {
             return;
         }
-        Funnel.A3Passed++;
-        if (!AbsorptionGuards.A4_VolumeWithoutProgress(_stallVolumeAtLevel, features.BaselinePerPriceVolume, _o))
+        if (!Conditions.Check(A4, AbsorptionGuards.A4_VolumeWithoutProgress(
+                _stallVolumeAtLevel, features.BaselinePerPriceVolume, _o)))
         {
             return;
         }
-        Funnel.A4Passed++;
-        if (!AbsorptionGuards.A5_Replenishment(
+        if (!Conditions.Check(A5, AbsorptionGuards.A5_Replenishment(
                 features.Liquidity.ReplenishRatio(DefendedSide, Level, e.TsEvent),
-                features.Liquidity.RefreshCount(DefendedSide, Level, e.TsEvent), _o))
+                features.Liquidity.RefreshCount(DefendedSide, Level, e.TsEvent), _o)))
         {
             return;
         }
-        Funnel.A5Passed++;
         int completedBuckets = (int)(stallNanos / bucketNanos);
         long peak = 0;
         for (int i = 0; i < completedBuckets && i < _bucketVolume.Count; i++)
@@ -298,13 +288,13 @@ public sealed class AbsorptionFadeDetector : SetupDetectorBase
         int last = completedBuckets - 1;
         long lastVolume = last >= 0 && last < _bucketVolume.Count ? _bucketVolume[last] : 0;
         long lastDelta = last >= 0 && last < _bucketFavorableDelta.Count ? _bucketFavorableDelta[last] : 0;
-        if (!AbsorptionGuards.A6_Exhaustion(completedBuckets, peak, lastVolume, lastDelta, _o))
+        if (!Conditions.Check(A6, AbsorptionGuards.A6_Exhaustion(completedBuckets, peak, lastVolume, lastDelta, _o)))
         {
             return;
         }
 
         // Candidate: global filters + journal (blocked candidates re-stall from Idle).
-        Funnel.Candidates++;
+        _candidates++;
         long stopDistanceTicks = _o.EntryLimitOffsetTicks + _o.StopOffsetTicks;
         var verdict = EmitCandidate(in e, tracker, features, _lastTradePrice, stopDistanceTicks);
         if (!verdict.Approved)

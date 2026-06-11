@@ -6,6 +6,7 @@ return args switch
     ["replay", var file, .. var rest] => await ReplayCommand.RunAsync(file, rest),
     ["synth", var file, .. var rest] => SynthCommand.Run(file, rest),
     ["report", var db, .. var rest] => ReportCommand.Run(db, rest),
+    ["inspect-trade", var db, var id, .. var rest] => await InspectTradeCommand.RunAsync(db, id, rest),
     _ => Usage(),
 };
 
@@ -35,6 +36,12 @@ static int Usage()
               net of costs, hit rate, MAE/MFE distributions, invalidation-vs-stop exit
               breakdown and equity curve. Writes a markdown report and CSV side-files
               (report_summary.csv, equity_curve.csv, trades.csv).
+
+          orderflow inspect-trade <journal.db> <candidate-id> [--data <file.dbn[.zst]>] [--set K=V]
+              Audit one journaled candidate: header/outcome/fills, the full F1-F36 feature
+              snapshot at trigger, and (Setup 5) the E1-E4 evidence. With --data, replays
+              the file to reconstruct the swing-divergence context (H1/H2, E1-E4 verdicts)
+              and a ±60s price/delta path around the entry. Read-only over the journal.
 
           orderflow synth <out.dbn.zst> [--events N] [--seed S]
               Generate a deterministic synthetic MBP-10 file (default 1,000,000 events, seed 42).

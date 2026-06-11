@@ -249,6 +249,43 @@ public class AbsorptionFadeDetectorTests
         Assert.Equal(SetupState.Idle, h.Detector.State);
     }
 
+    [Fact]
+    public void Funnel_CountsTheConditionChain_ThroughArm()
+    {
+        var h = new Harness();
+        h.Arm();
+        var c = h.Detector.Conditions;
+        Assert.True(c.Passed("A1") >= 1);
+        Assert.True(c.Passed("A2rdy") >= 1);
+        Assert.True(c.Passed("A2") >= 1);
+        Assert.True(c.Passed("A3") >= 1);
+        Assert.True(c.Passed("A4") >= 1);
+        Assert.True(c.Passed("A5") >= 1);
+        Assert.Equal(1, c.Passed("A6"));
+        // A3 was evaluated on every in-context event before the stall matured — the
+        // funnel must show the failures, not just the final pass.
+        Assert.True(c.Evaluated("A3") > c.Passed("A3"));
+        Assert.Contains("A2rdy", h.Detector.FunnelLine());
+    }
+
+    [Fact]
+    public void Funnel_CountsUnreadyBaseline_AsA2rdyFailures()
+    {
+        var h = new Harness(feOpts: new FeatureEngineOptions
+        {
+            SessionMinSamples = 200,
+            AtrBarSeconds = 60,
+            AtrPeriodBars = 1,
+        });
+        h.RunPrelude();
+        h.RunDecline();
+        var c = h.Detector.Conditions;
+        Assert.True(c.Passed("A1") >= 1);
+        Assert.True(c.Evaluated("A2rdy") >= 1);
+        Assert.Equal(0, c.Passed("A2rdy"));
+        Assert.Equal(0, c.Evaluated("A2"));
+    }
+
     // ----- arming -----
 
     [Fact]

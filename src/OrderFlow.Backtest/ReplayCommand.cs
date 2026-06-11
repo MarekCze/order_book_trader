@@ -122,6 +122,13 @@ internal static class ReplayCommand
                         $"Vol gate [{instrumentId}]: DISABLED (pass-through) for {entry.Coordinator.VolGatePassThroughCount:N0} candidates " +
                         "— regime ATR baseline < MinBaselineSessions.");
                 }
+                if (features!.Engines.TryGetValue(instrumentId, out var engine))
+                {
+                    Console.WriteLine(
+                        $"Swings [{instrumentId}]: confirmed highs {engine.ConfirmedSwingHighs:N0}, " +
+                        $"lows {engine.ConfirmedSwingLows:N0} " +
+                        $"(Features:SwingPullbackTicks={options.Features.SwingPullbackTicks})");
+                }
             }
             TradeSummaryPrinter.Print(Console.Out, journalPath);
             Console.WriteLine($"Journal:  {journalPath}");
