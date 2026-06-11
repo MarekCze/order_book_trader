@@ -166,3 +166,54 @@ S5 DeltaDivFade   : E1 (most pass) → E2 (~10% pass) → E3 → E4 → trades (
 **Directly sets up item 4** (S1/S4 threshold-scaling sweep): the factors should scale
 **S1 `StallVolumeMultiple`** (the A4 wall) and **S4 `DepthDeclineFraction` + `PullRatioMin`**
 (the D2 wall) at ×1.0/0.8/0.6/0.4 and watch the A4 / D2 passed counts begin to lift.
+
+---
+
+## Item 4 — S1/S4 threshold-scaling sweep (2026-06-11)
+
+Script: `runs/sweep_s1_s4.sh`. A single multiplicative factor applied per run to S1's A4
+threshold (`StallVolumeMultiple`, default 3.0) and S4's D2 thresholds
+(`DepthDeclineFraction` 0.40 + `PullRatioMin` 1.5), all via `--set`, ephemeral state,
+no config files touched. Summed over the 5-day week, both directions:
+
+| factor | S1.StallVolMult | S1 A4 pass/eval | S1 cand | S4.DDF / PRM | S4 D2 pass/eval | S4 cand |
+|---|---|---|---|---|---|---|
+| ×1.0 | 3.0 | 0/97,484 | 0 | 0.40 / 1.5 | 0/4,686,141 | 0 |
+| ×0.8 | 2.4 | 0/97,484 | 0 | 0.32 / 1.2 | 0/4,686,141 | 0 |
+| ×0.6 | 1.8 | 0/97,484 | 0 | 0.24 / 0.9 | 214,868/3,879,650 | 50,910 |
+| ×0.4 | 1.2 | 0/97,484 | 0 | 0.16 / 0.6 | 306,312/2,249,518 | 43,819 |
+
+**Setup 4 — D2 begins to fire between ×0.8 and ×0.6** (i.e. `DepthDeclineFraction` ≲ 0.24
+and `PullRatioMin` ≲ 0.9). The boundary is a cliff, not a ramp: 0 → 214k passes / 50,910
+candidates in one step, then it floods. The rulebook 0.40/1.5 is far on the dead side. So
+S4's silence IS a threshold-calibration problem, but the firing region is wildly permissive —
+50k candidates/week is not a tradeable setup, just proof the gate opens. Real calibration
+needs a much finer grid in [×0.6, ×0.8] plus a tighter D3/location/quality filter.
+
+**Setup 1 — A4 does NOT begin to fire anywhere in ×1.0…×0.4.** A4's evaluated count is
+constant (97,484 = the A3 stalls; the multiplier doesn't change upstream) but passed stays
+0 even at `StallVolumeMultiple`=1.2. This is NOT a near-miss: lowering the multiplier 2.5×
+moves nothing, which means the measured stall volume at [L, L+1] is essentially always far
+below baseline — a structural issue (the metric, not the threshold). Probing lower
+(×0.2/×0.1) to confirm — see below. A4 likely needs a definition review (what volume
+is being accumulated at the level during the stall), not just a threshold change.
+
+**S1 deep probe (×0.2, ×0.1; A4 summed over week):**
+
+| factor | S1.StallVolMult | S1 A4 pass/eval | S1 cand |
+|---|---|---|---|
+| ×0.2 | 0.6 | 8,430/97,484 | 0 |
+| ×0.1 | 0.3 | 30,588/79,306 | 3 |
+
+A4 only **begins to pass at ×0.2** (`StallVolumeMultiple`=0.6 — 5× below the rulebook 3.0),
+confirming the stall volume at [L, L+1] is typically a *fraction* of the per-price baseline,
+never a multiple. And even with A4 open at ×0.2, **candidates stay 0** — A5 (replenishment)
+and A6 (exhaustion) then block; only at ×0.1 do 3 candidates emerge. So **Setup 1 has
+several deep walls (A4, then A5/A6), not one tunable threshold.** Conclusion: S1 is not a
+calibration miss — its A4 volume metric and the A5/A6 chain need a definition review against
+this data before any threshold is meaningful. (Eval drops to 79,306 at ×0.1 because once the
+machine arms/trades it spends fewer events in the A3 stall — a second-order effect.)
+
+**Item 4 verdict:** S4 silence is a (steep) threshold-calibration issue with a firing
+boundary at ~×0.7; S1 silence is structural (metric/definition), not a threshold. No
+defaults changed — diagnostics only, per the iteration's "diagnostics before optimization".
