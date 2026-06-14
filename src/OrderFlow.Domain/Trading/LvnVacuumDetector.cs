@@ -79,9 +79,9 @@ public sealed class LvnVacuumDetector : SetupDetectorBase
     /// the downside short, asks for the upside long).</summary>
     private Side PullSide => Direction == TradeDirection.Long ? Side.Ask : Side.Bid;
 
-    private Side EntrySide => Direction == TradeDirection.Long ? Side.Bid : Side.Ask;
+    private Side EntrySide => ExecBuySide;
 
-    private Side ExitSide => Direction == TradeDirection.Long ? Side.Ask : Side.Bid;
+    private Side ExitSide => ExecSellSide;
 
     protected override void Step(in MarketEvent e, BookStateTracker tracker, FeatureEngine features)
     {
@@ -201,7 +201,7 @@ public sealed class LvnVacuumDetector : SetupDetectorBase
         State = SetupState.Armed;
         Risk.Reserve(Level.RawNano);
         _entryOrderId = Exec.Place(new OrderSpec(
-            EntrySide, OrderType.StopMarket, Level.AddTicks(Sign * _o.EntryOffsetTicks, Tick), verdict.Quantity));
+            EntrySide, OrderType.StopMarket, Level.AddTicks(ExecSign * _o.EntryOffsetTicks, Tick), verdict.Quantity));
         _armTs = e.TsEvent;
         State = SetupState.OrderWorking;
     }
@@ -257,9 +257,9 @@ public sealed class LvnVacuumDetector : SetupDetectorBase
             // Stop 1 tick beyond the LVN zone against the trade; single target front-running
             // the next HVN by 1 tick (100% exit — vacuum trades get no runners).
             _stopOrderId = Exec.Place(new OrderSpec(
-                ExitSide, OrderType.StopMarket, Level.AddTicks(-Sign * _o.StopOffsetTicks, Tick), Remaining));
+                ExitSide, OrderType.StopMarket, Level.AddTicks(-ExecSign * _o.StopOffsetTicks, Tick), Remaining));
             _targetOrderId = Exec.Place(new OrderSpec(
-                ExitSide, OrderType.Limit, _hvn.AddTicks(-Sign * _o.TargetFrontRunTicks, Tick), Remaining));
+                ExitSide, OrderType.Limit, _hvn.AddTicks(-ExecSign * _o.TargetFrontRunTicks, Tick), Remaining));
             return;
         }
 

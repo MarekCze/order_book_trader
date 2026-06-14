@@ -265,3 +265,21 @@ needs ~57% hit rate; actual 31% → **entry quality is the binding ceiling, not 
 (3) **Trailing-stop (planned Stage 2 code) is NOT worth building** — MFEs (6% reach 3R) mean a
 runner captures ~nothing beyond P2's flat 1R. Exit fix is achievable in config.
 **Recommendation:** adopt P2-style geometry (config); skip the code change; next lever = entries.
+
+---
+
+## Inverted trade direction (2026-06-14) — full results in `runs/inverted-direction-results.md`
+
+**Command:** `runs/inverted_run.sh` (week, default config, `--set Risk:InvertDirection=true`).
+New gated flag `Risk:InvertDirection` (default off, byte-identical, 307 tests pass): mirrors
+execution (`ExecSign=−Sign`) — entry side, brackets, R, P&L — while detection is unchanged, so
+every trade is taken on the opposite side (old SL level ↔ TP level).
+
+**Result — inverting makes it WORSE:** 35 trades, 4W/31L, net **−$17,219** (vs baseline −$6,162),
+hit rate 31%→11%, expectancy −$385→−$492, maxDD $17.4k. Exits: 28 stops, 4 T1-breakeven, 3
+targets (≈$0) — not a bug, the inverted trades just lose.
+
+**Finding:** **direction is not the problem — fading is the correct side.** Buying highs /
+selling lows gets caught by the same mean-reversion the fades target, so the inverse stops out
+more and ~triples the loss. Corroborates that losses come from **entry quality + R:R/costs, not
+the side.** No defaults changed.
