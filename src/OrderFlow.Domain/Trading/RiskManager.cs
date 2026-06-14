@@ -93,6 +93,12 @@ public sealed class RiskOptions
 
     /// <summary>Engineering safety cap on position size (not from the rulebook).</summary>
     public int MaxPositionContracts { get; set; } = 10;
+
+    /// <summary>Experiment knob (NOT a rulebook value): when true, every trade is executed on
+    /// the OPPOSITE side — detection is unchanged (the same signals fire), but the entry side,
+    /// stop/target brackets, R, P&L and excursions are all mirrored, so the old stop level
+    /// becomes the take-profit and vice versa. Default false = normal behaviour (byte-identical).</summary>
+    public bool InvertDirection { get; set; }
 }
 
 /// <summary>

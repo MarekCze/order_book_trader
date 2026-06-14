@@ -62,6 +62,17 @@ public abstract class SetupDetectorBase
     /// space and mirrored through this sign.</summary>
     protected int Sign => Direction == TradeDirection.Long ? 1 : -1;
 
+    /// <summary>Execution sign: equals <see cref="Sign"/> normally, or its negation when
+    /// <see cref="RiskOptions.InvertDirection"/> is set. DETECTION uses <see cref="Sign"/>
+    /// (same signals fire); all ORDER placement, brackets, R, P&amp;L and excursions use this,
+    /// so an inverted run takes the opposite side with the stop/target swapped.</summary>
+    protected int ExecSign => RiskOpts.InvertDirection ? -Sign : Sign;
+
+    /// <summary>Long-side / short-side for execution, mirrored when inverted.</summary>
+    protected Side ExecBuySide => ExecSign > 0 ? Side.Bid : Side.Ask;
+
+    protected Side ExecSellSide => ExecSign > 0 ? Side.Ask : Side.Bid;
+
     // ----- active candidate / trade state -----
 
     protected long CandidateId { get; private set; }
@@ -195,7 +206,7 @@ public abstract class SetupDetectorBase
     /// <summary>MAE/MFE in ticks from the entry fill, driven by trade prints.</summary>
     protected void UpdateExcursions(Price tradePrice)
     {
-        long excursion = Sign * (tradePrice.RawNano - EntryFill.Price.RawNano) / Tick.RawNano;
+        long excursion = ExecSign * (tradePrice.RawNano - EntryFill.Price.RawNano) / Tick.RawNano;
         MfeTicks = Math.Max(MfeTicks, excursion);
         MaeTicks = Math.Max(MaeTicks, -excursion);
     }
@@ -231,7 +242,7 @@ public abstract class SetupDetectorBase
         decimal gross = 0m;
         foreach (var fill in ExitFills)
         {
-            long ticks = Sign * (fill.Price.RawNano - EntryFill.Price.RawNano) / Tick.RawNano;
+            long ticks = ExecSign * (fill.Price.RawNano - EntryFill.Price.RawNano) / Tick.RawNano;
             gross += ticks * RiskOpts.TickValue * fill.Quantity;
         }
         decimal commission = ExecOpts.CommissionPerContractRoundTurn * EntryFill.Quantity;

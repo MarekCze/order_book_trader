@@ -105,9 +105,9 @@ public sealed class AbsorptionFadeDetector : SetupDetectorBase
 
     private Side AggressorSide => Direction == TradeDirection.Long ? Side.Ask : Side.Bid;
 
-    private Side EntrySide => Direction == TradeDirection.Long ? Side.Bid : Side.Ask;
+    private Side EntrySide => ExecBuySide;
 
-    private Side ExitSide => Direction == TradeDirection.Long ? Side.Ask : Side.Bid;
+    private Side ExitSide => ExecSellSide;
 
     protected override void Step(in MarketEvent e, BookStateTracker tracker, FeatureEngine features)
     {
@@ -306,7 +306,7 @@ public sealed class AbsorptionFadeDetector : SetupDetectorBase
         Risk.Reserve(Level.RawNano);
         _qty = verdict.Quantity;
         _entryOrderId = Exec.Place(new OrderSpec(
-            EntrySide, OrderType.Limit, Level.AddTicks(Sign * _o.EntryLimitOffsetTicks, Tick), _qty));
+            EntrySide, OrderType.Limit, Level.AddTicks(ExecSign * _o.EntryLimitOffsetTicks, Tick), _qty));
         _armTs = e.TsEvent;
         _escalated = false;
         _maxDisplayedSinceArm = tracker.DisplayedAt(DefendedSide, Level);
@@ -337,7 +337,7 @@ public sealed class AbsorptionFadeDetector : SetupDetectorBase
         }
         if (!_escalated && !_lastTradePrice.IsUndefined)
         {
-            long advanceTicks = Sign * (_lastTradePrice.RawNano - Level.RawNano) / Tick.RawNano;
+            long advanceTicks = ExecSign * (_lastTradePrice.RawNano - Level.RawNano) / Tick.RawNano;
             if (AbsorptionGuards.ShouldEscalateToMomentum(sinceArm, advanceTicks, _o))
             {
                 CancelOrder(ref _entryOrderId);
@@ -352,7 +352,7 @@ public sealed class AbsorptionFadeDetector : SetupDetectorBase
                 }
                 _qty = qty;
                 _entryOrderId = Exec.Place(new OrderSpec(
-                    EntrySide, OrderType.StopMarket, Level.AddTicks(Sign * _o.MomentumStopOffsetTicks, Tick), _qty));
+                    EntrySide, OrderType.StopMarket, Level.AddTicks(ExecSign * _o.MomentumStopOffsetTicks, Tick), _qty));
                 _escalated = true;
             }
         }
@@ -446,7 +446,7 @@ public sealed class AbsorptionFadeDetector : SetupDetectorBase
             }
             _stopOrderId = Exec.Place(new OrderSpec(
                 ExitSide, OrderType.StopMarket,
-                EntryFill.Price.AddTicks(-Sign * _o.BreakevenOffsetTicks, Tick), Remaining));
+                EntryFill.Price.AddTicks(-ExecSign * _o.BreakevenOffsetTicks, Tick), Remaining));
             _t2OrderId = Exec.Place(new OrderSpec(ExitSide, OrderType.Limit, ComputeT2(features), Remaining));
         }
         else if (fill.OrderId == _stopOrderId)
@@ -474,13 +474,13 @@ public sealed class AbsorptionFadeDetector : SetupDetectorBase
         _entryOrderId = -1;
         OpenPosition(in fill);
         _entryTs = fill.Ts;
-        var stopPrice = Level.AddTicks(-Sign * _o.StopOffsetTicks, Tick);
-        _rTicks = Sign * (fill.Price.RawNano - stopPrice.RawNano) / Tick.RawNano;
+        var stopPrice = Level.AddTicks(-ExecSign * _o.StopOffsetTicks, Tick);
+        _rTicks = ExecSign * (fill.Price.RawNano - stopPrice.RawNano) / Tick.RawNano;
         _stopOrderId = Exec.Place(new OrderSpec(ExitSide, OrderType.StopMarket, stopPrice, Remaining));
         long t1Ticks = (long)Math.Round(_o.T1RMultiple * _rTicks, MidpointRounding.AwayFromZero);
         long t1Qty = Math.Clamp((long)Math.Floor(fill.Quantity * _o.T1ExitFraction), 1, fill.Quantity);
         _t1OrderId = Exec.Place(new OrderSpec(
-            ExitSide, OrderType.Limit, fill.Price.AddTicks(Sign * t1Ticks, Tick), t1Qty));
+            ExitSide, OrderType.Limit, fill.Price.AddTicks(ExecSign * t1Ticks, Tick), t1Qty));
     }
 
     /// <summary>T2: nearest opposing structure capped at T2RCap × R. v1 computes the
@@ -492,12 +492,12 @@ public sealed class AbsorptionFadeDetector : SetupDetectorBase
         long t2Ticks = capTicks;
         if (features.DevelopingPoc is { } poc)
         {
-            long pocTicks = Sign * (poc.RawNano - EntryFill.Price.RawNano) / Tick.RawNano;
+            long pocTicks = ExecSign * (poc.RawNano - EntryFill.Price.RawNano) / Tick.RawNano;
             if (pocTicks > 0)
             {
                 t2Ticks = Math.Min(t2Ticks, pocTicks);
             }
         }
-        return EntryFill.Price.AddTicks(Sign * t2Ticks, Tick);
+        return EntryFill.Price.AddTicks(ExecSign * t2Ticks, Tick);
     }
 }

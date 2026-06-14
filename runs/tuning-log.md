@@ -132,3 +132,154 @@ iteration-1 commit (`16102cc`) are both reachable from `origin/main` (merged via
 **Not touched (per plan item 4):** Setup 5 geometry (offsets, breakeven, T1/T2) and all
 detector thresholds are unchanged; the S1/S4 threshold-scaling sweep (item 3) waits for
 the funnel re-run on real data.
+
+---
+
+## Funnel telemetry on the REAL week (2026-06-11, resolves the blocked iteration-2 audits)
+
+Ran the iteration-2 per-condition telemetry (PR #10) on the real ES week (default config,
+chained state) — the run the iteration-2 session could not do (no DBN files there). Week
+report reproduces RUN A2 byte-for-byte: **16 trades, 5W/11L, −$6,161.50** → confirms PR #10
+added telemetry only, zero behaviour change. Per-condition passed/evaluated (chain order),
+representative day; pattern holds all 5 days:
+
+```
+S1 AbsorptionFade : A1 → A2rdy → A2 → A3 → A4 0/N → A5 0/0 → A6 0/0   (A4 is an absolute wall)
+S2 StopRunFade    : B1B2 → B3 (~1% pass) → B4 (all pass) → B5 ~0/N    (B3 climax, then B5 supply)
+S4 LvnVacuum      : D1lvn → D1room → D2 0/N → D3 0/0                  (D2 is an absolute wall)
+S5 DeltaDivFade   : E1 (most pass) → E2 (~10% pass) → E3 → E4 → trades (works; E2 is the filter)
+```
+
+**Binding constraints (the answer to "why are S1/S4 silent"):**
+- **Setup 1 — `A4` (volume-without-progress, `StallVolumeMultiple`=3×) passes 0 of thousands
+  of A3-stall events, every day, both sides.** A3 produces plenty of stalls; none carry 3×
+  baseline volume at [L, L+1]. (Day 5 also shows A3 0/N — `StallSeconds`=45 vs ~15–24 s max
+  stalls that day — but A4 is the dominant wall.)
+- **Setup 4 — `D2` (depth-decline `DepthDeclineFraction`=0.40 + `PullRatioMin`=1.5) passes
+  0 of hundreds of thousands to millions, every day.** D1 (LVN proximity + HVN room) fires
+  constantly; the cancel/pull signal never reaches threshold.
+- **Setup 2 —** `B3` (climax ≥ 90th pctl) filters ~99%, then `B5` (supply confirmation)
+  takes nearly all the rest → ~1 candidate all week.
+- **Setup 5 —** the only setup that trades; `E2` (cum-delta / non-confirming-bar divergence)
+  is the selective filter (~10% pass), E1/E3/E4 are permissive.
+
+**Directly sets up item 4** (S1/S4 threshold-scaling sweep): the factors should scale
+**S1 `StallVolumeMultiple`** (the A4 wall) and **S4 `DepthDeclineFraction` + `PullRatioMin`**
+(the D2 wall) at ×1.0/0.8/0.6/0.4 and watch the A4 / D2 passed counts begin to lift.
+
+---
+
+## Item 4 — S1/S4 threshold-scaling sweep (2026-06-11)
+
+Script: `runs/sweep_s1_s4.sh`. A single multiplicative factor applied per run to S1's A4
+threshold (`StallVolumeMultiple`, default 3.0) and S4's D2 thresholds
+(`DepthDeclineFraction` 0.40 + `PullRatioMin` 1.5), all via `--set`, ephemeral state,
+no config files touched. Summed over the 5-day week, both directions:
+
+| factor | S1.StallVolMult | S1 A4 pass/eval | S1 cand | S4.DDF / PRM | S4 D2 pass/eval | S4 cand |
+|---|---|---|---|---|---|---|
+| ×1.0 | 3.0 | 0/97,484 | 0 | 0.40 / 1.5 | 0/4,686,141 | 0 |
+| ×0.8 | 2.4 | 0/97,484 | 0 | 0.32 / 1.2 | 0/4,686,141 | 0 |
+| ×0.6 | 1.8 | 0/97,484 | 0 | 0.24 / 0.9 | 214,868/3,879,650 | 50,910 |
+| ×0.4 | 1.2 | 0/97,484 | 0 | 0.16 / 0.6 | 306,312/2,249,518 | 43,819 |
+
+**Setup 4 — D2 begins to fire between ×0.8 and ×0.6** (i.e. `DepthDeclineFraction` ≲ 0.24
+and `PullRatioMin` ≲ 0.9). The boundary is a cliff, not a ramp: 0 → 214k passes / 50,910
+candidates in one step, then it floods. The rulebook 0.40/1.5 is far on the dead side. So
+S4's silence IS a threshold-calibration problem, but the firing region is wildly permissive —
+50k candidates/week is not a tradeable setup, just proof the gate opens. Real calibration
+needs a much finer grid in [×0.6, ×0.8] plus a tighter D3/location/quality filter.
+
+**Setup 1 — A4 does NOT begin to fire anywhere in ×1.0…×0.4.** A4's evaluated count is
+constant (97,484 = the A3 stalls; the multiplier doesn't change upstream) but passed stays
+0 even at `StallVolumeMultiple`=1.2. This is NOT a near-miss: lowering the multiplier 2.5×
+moves nothing, which means the measured stall volume at [L, L+1] is essentially always far
+below baseline — a structural issue (the metric, not the threshold). Probing lower
+(×0.2/×0.1) to confirm — see below. A4 likely needs a definition review (what volume
+is being accumulated at the level during the stall), not just a threshold change.
+
+**S1 deep probe (×0.2, ×0.1; A4 summed over week):**
+
+| factor | S1.StallVolMult | S1 A4 pass/eval | S1 cand |
+|---|---|---|---|
+| ×0.2 | 0.6 | 8,430/97,484 | 0 |
+| ×0.1 | 0.3 | 30,588/79,306 | 3 |
+
+A4 only **begins to pass at ×0.2** (`StallVolumeMultiple`=0.6 — 5× below the rulebook 3.0),
+confirming the stall volume at [L, L+1] is typically a *fraction* of the per-price baseline,
+never a multiple. And even with A4 open at ×0.2, **candidates stay 0** — A5 (replenishment)
+and A6 (exhaustion) then block; only at ×0.1 do 3 candidates emerge. So **Setup 1 has
+several deep walls (A4, then A5/A6), not one tunable threshold.** Conclusion: S1 is not a
+calibration miss — its A4 volume metric and the A5/A6 chain need a definition review against
+this data before any threshold is meaningful. (Eval drops to 79,306 at ×0.1 because once the
+machine arms/trades it spends fewer events in the A3 stall — a second-order effect.)
+
+**Item 4 verdict:** S4 silence is a (steep) threshold-calibration issue with a firing
+boundary at ~×0.7; S1 silence is structural (metric/definition), not a threshold. No
+defaults changed — diagnostics only, per the iteration's "diagnostics before optimization".
+
+---
+
+## Permissive "many entrances" run (2026-06-14) — full results in `runs/permissive-run-results.md`
+
+**Command:** `runs/permissive_run.sh` (binding-wall conditions opened to sweep firing levels,
+filter-5 caps lifted, all via `--set`; context conditions + global filters 1–4/6 default).
+
+**Config delta vs defaults:** S1 `StallVolumeMultiple=0.5,ReplenishRatioMin=0.5,RefreshCountMin=1,
+ExhaustionDropRatio=0.3`; S2 `ClimaxVolumePercentile=0.3,ClimaxShareBeyondLevel=0.3,
+SupplyDepthIncrease=0.1,StackedImbalanceMinLen=2`; S4 `DepthDeclineFraction=0.24,PullRatioMin=0.9,
+MinAlignedDeltaContracts=0`; `Risk:MaxAttemptsPerLoi=1000,ConsecutiveStopOutsToKillLevel=1000`.
+
+**Headline:** 70,133 candidates (vs 94 default) → only **48 trades** (vs 16). **66,494 (95%)
+blocked PositionOpen.** Net −$23,285.70, hit rate 8.3%, PF 0.05, 47/48 exits Stop.
+
+**Findings:** (1) The trade-frequency ceiling is the **hard-coded one-position-at-a-time rule**,
+not the setups — loosening thresholds 750×'d candidates but only 3×'d trades. "Many entrances"
+is architecturally gated (needs a portfolio-model code change), not threshold-gated. (2)
+Loosening signal thresholds **destroys entry quality** (hit rate 31%→8%, PF 0.12→0.05) — the
+strict rulebook thresholds are quality filters, not just throttles. (3) S1 still trades 0 even
+with A4 open (A5/A6 block) — reconfirms S1 is structural. S4 dominates (30/48; flood + detector
+order). **Process note:** a maximally-open profile (D2/D3 always-pass) was degenerate
+(candidate-per-event, 68 MB/day, killed) → moderated to sweep firing levels. No defaults changed.
+
+---
+
+## Exit-geometry sweep (2026-06-14) — full results in `runs/exit-geometry-results.md`
+
+**Command:** `runs/exit_geometry_sweep.sh` (config-only; default entry config; exit knobs on
+S1/S2/S5 via `--set`; no defaults changed). Tests the diagnosis that wins are capped at +0.5R
+because T1-50%-then-breakeven + unreachable-3R-T2 → the runner contributes 0.
+
+| Profile | Net | Expectancy | Avg win | Targets |
+|---|---:|---:|---:|---:|
+| P0 baseline (1R/0.5/3R) | −$6,161 | −$385 | $173.5 | 0 |
+| **P2 single @1R (frac=1.0)** | **−$4,599** | **−$287** | **$486** | 5 |
+| P4 lock-runner (T2 1.5R, BE −1) | −$5,099 | −$319 | $386 | 2 |
+| P1 early-T1 / P3 tiny-T1 | worse (−$9.4k / −$8.8k) | | | |
+
+**Findings:** (1) Taking the **full position at the 1R target** (P2) beats the
+scale-out-then-breakeven baseline — same 16 trades/5 winners, but each banks the full 1R →
+avg win ×2.8 ($173.5→$486), expectancy +~25% (−$385→−$287), lowest maxDD; payoff 0.27→0.76.
+The runner gave up nothing (T2 never reached). (2) Still **net-negative**: P2's 0.76 payoff
+needs ~57% hit rate; actual 31% → **entry quality is the binding ceiling, not exits.**
+(3) **Trailing-stop (planned Stage 2 code) is NOT worth building** — MFEs (6% reach 3R) mean a
+runner captures ~nothing beyond P2's flat 1R. Exit fix is achievable in config.
+**Recommendation:** adopt P2-style geometry (config); skip the code change; next lever = entries.
+
+---
+
+## Inverted trade direction (2026-06-14) — full results in `runs/inverted-direction-results.md`
+
+**Command:** `runs/inverted_run.sh` (week, default config, `--set Risk:InvertDirection=true`).
+New gated flag `Risk:InvertDirection` (default off, byte-identical, 307 tests pass): mirrors
+execution (`ExecSign=−Sign`) — entry side, brackets, R, P&L — while detection is unchanged, so
+every trade is taken on the opposite side (old SL level ↔ TP level).
+
+**Result — inverting makes it WORSE:** 35 trades, 4W/31L, net **−$17,219** (vs baseline −$6,162),
+hit rate 31%→11%, expectancy −$385→−$492, maxDD $17.4k. Exits: 28 stops, 4 T1-breakeven, 3
+targets (≈$0) — not a bug, the inverted trades just lose.
+
+**Finding:** **direction is not the problem — fading is the correct side.** Buying highs /
+selling lows gets caught by the same mean-reversion the fades target, so the inverse stops out
+more and ~triples the loss. Corroborates that losses come from **entry quality + R:R/costs, not
+the side.** No defaults changed.

@@ -77,9 +77,9 @@ public sealed class DeltaDivergenceFadeDetector : SetupDetectorBase
         _o = options;
     }
 
-    private Side EntrySide => Direction == TradeDirection.Long ? Side.Bid : Side.Ask;
+    private Side EntrySide => ExecBuySide;
 
-    private Side ExitSide => Direction == TradeDirection.Long ? Side.Ask : Side.Bid;
+    private Side ExitSide => ExecSellSide;
 
     protected override void Step(in MarketEvent e, BookStateTracker tracker, FeatureEngine features)
     {
@@ -227,7 +227,7 @@ public sealed class DeltaDivergenceFadeDetector : SetupDetectorBase
         State = SetupState.Armed;
         Risk.Reserve(Level.RawNano);
         _entryOrderId = Exec.Place(new OrderSpec(
-            EntrySide, OrderType.Limit, _h2.AddTicks(Sign * _o.EntryOffsetTicks, Tick), verdict.Quantity));
+            EntrySide, OrderType.Limit, _h2.AddTicks(ExecSign * _o.EntryOffsetTicks, Tick), verdict.Quantity));
         _armTs = e.TsEvent;
         State = SetupState.OrderWorking;
     }
@@ -278,7 +278,7 @@ public sealed class DeltaDivergenceFadeDetector : SetupDetectorBase
         if (beyondPriorSwing)
         {
             long signedSize = e.Side == Side.Bid ? e.Size : -(long)e.Size;
-            _bucketAdverseDelta += -Sign * signedSize; // adverse = against the fade
+            _bucketAdverseDelta += -ExecSign * signedSize; // adverse = against the (possibly inverted) position
         }
         return Setup5Guards.Invalidation_RealAggressors(_bucketAdverseDelta, _o);
     }
@@ -330,7 +330,7 @@ public sealed class DeltaDivergenceFadeDetector : SetupDetectorBase
             }
             _stopOrderId = Exec.Place(new OrderSpec(
                 ExitSide, OrderType.StopMarket,
-                EntryFill.Price.AddTicks(-Sign * _o.BreakevenOffsetTicks, Tick), Remaining));
+                EntryFill.Price.AddTicks(-ExecSign * _o.BreakevenOffsetTicks, Tick), Remaining));
             _t2OrderId = Exec.Place(new OrderSpec(ExitSide, OrderType.Limit, ComputeT2(features), Remaining));
         }
         else if (fill.OrderId == _stopOrderId)
@@ -360,13 +360,13 @@ public sealed class DeltaDivergenceFadeDetector : SetupDetectorBase
         _entryTs = fill.Ts;
         _bucketIndex = long.MinValue;
         _bucketAdverseDelta = 0;
-        var stopPrice = _h2.AddTicks(-Sign * _o.StopOffsetTicks, Tick);
-        _rTicks = Sign * (fill.Price.RawNano - stopPrice.RawNano) / Tick.RawNano;
+        var stopPrice = _h2.AddTicks(-ExecSign * _o.StopOffsetTicks, Tick);
+        _rTicks = ExecSign * (fill.Price.RawNano - stopPrice.RawNano) / Tick.RawNano;
         _stopOrderId = Exec.Place(new OrderSpec(ExitSide, OrderType.StopMarket, stopPrice, Remaining));
         long t1Ticks = (long)Math.Round(_o.T1RMultiple * _rTicks, MidpointRounding.AwayFromZero);
         long t1Qty = Math.Clamp((long)Math.Floor(fill.Quantity * _o.T1ExitFraction), 1, fill.Quantity);
         _t1OrderId = Exec.Place(new OrderSpec(
-            ExitSide, OrderType.Limit, fill.Price.AddTicks(Sign * t1Ticks, Tick), t1Qty));
+            ExitSide, OrderType.Limit, fill.Price.AddTicks(ExecSign * t1Ticks, Tick), t1Qty));
     }
 
     /// <summary>T2: developing POC in the profit direction, capped at T2RCap × R (VWAP and the
@@ -377,12 +377,12 @@ public sealed class DeltaDivergenceFadeDetector : SetupDetectorBase
         long t2Ticks = capTicks;
         if (features.DevelopingPoc is { } poc)
         {
-            long pocTicks = Sign * (poc.RawNano - EntryFill.Price.RawNano) / Tick.RawNano;
+            long pocTicks = ExecSign * (poc.RawNano - EntryFill.Price.RawNano) / Tick.RawNano;
             if (pocTicks > 0)
             {
                 t2Ticks = Math.Min(t2Ticks, pocTicks);
             }
         }
-        return EntryFill.Price.AddTicks(Sign * t2Ticks, Tick);
+        return EntryFill.Price.AddTicks(ExecSign * t2Ticks, Tick);
     }
 }
