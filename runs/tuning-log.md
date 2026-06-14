@@ -283,3 +283,31 @@ targets (≈$0) — not a bug, the inverted trades just lose.
 selling lows gets caught by the same mean-reversion the fades target, so the inverse stops out
 more and ~triples the loss. Corroborates that losses come from **entry quality + R:R/costs, not
 the side.** No defaults changed.
+
+---
+
+## Entry-quality diagnosis (2026-06-14) — full results in `runs/entry-quality-diagnosis.md`
+
+**Command:** re-ran the week (Release, per-day journals, chained `Storage:SqlitePath`),
+reproduced **16 trades / 5W-11L / −$6,161.50** byte-for-byte, then `inspect-trade --data` on
+all 16 + SQL fact table. Diagnostics-only; no defaults/thresholds/code changed.
+
+**Findings (n=16, all Setup 5; hypotheses, not proofs):**
+- **Outcome is binary, and it's an entry problem not an exit problem.** 11 losers have MFE
+  ∈ {0,1,2} ticks (never near +1R); 5 winners have MFE 5–12 (hit T1 fast). No loser reaches
+  MFE 3 → **widening the stop only enlarges losses; tightening kills winners. The R≈4t stop is
+  correctly sized.** Exits (P2) are already the only lever and can't fix this.
+- **S5 fades live climaxes (continuation), not exhaustion.** 6/11 losers stop in <4s (three in
+  0.0–0.1s). Day-1 cascade: 4 shorts fired *within one second* at successive new highs of a
+  vertical rally, each into **+13–21σ buy flow** (`f8_delta_z_w10`). S5's trigger has no
+  stall/deceleration gate (unlike S1's A3/A6). Blocking the 5 Day-1 climax entries alone →
+  net −$6,161.50 → **−$3,779 (−39%)**.
+- **E4 never required a reclaim:** all 16 triggered on `imbalance-near-extreme` with
+  `reclaimed-past-H1=False`; E2 often passed on the weak non-confirming-bar branch.
+- Deferred audits answered: 2a MAE/MFE split is clean (t1=1 win / t1=0 loss); 2c swings
+  1.4k–5.2k/session, S5 not over-firing by count (E3 gates to 2–13/day) — quality not quantity.
+
+**Top hypothesis for next round (detector change, not a knob tweak):** add a flow-exhaustion /
+stall gate to the S5 trigger (e.g. block while `|f8_delta_z_w10|` extreme, or require last
+delta bucket to roll over from peak). Secondary: require E4's `reclaimed-past-H1`; add a
+re-arm cooldown to kill cascades. No defaults changed.
