@@ -59,6 +59,41 @@ public sealed class Setup5Options
     /// VWAP is not computed in v1, documented) caps below it.</summary>
     public double T2RCap { get; set; } = 3.0;
 
+    // ----- flow-exhaustion gates (opt-in; both default OFF → byte-identical baseline) -----
+    // Diagnosis (runs/entry-quality-diagnosis.md): S5 fades LIVE climaxes — it triggers while
+    // with-the-move aggressor flow is still extreme, so entries fire into continuation. These two
+    // independent, opt-in gates refuse to fade an un-exhausted push. See tasks/001-s5-flow-exhaustion-gate.md.
+
+    /// <summary>Option A — extreme-flow gate. When true, the trigger is blocked while the
+    /// with-the-move flow z-score (F8 over <see cref="FlowClimaxWindowSeconds"/>) is ≥
+    /// <see cref="MaxTriggerFlowZ"/>. OFF by default.</summary>
+    public bool FlowClimaxGateEnabled { get; set; } = false;
+
+    /// <summary>Option A: block the fade while with-the-move flow z-score is at/above this (the
+    /// Day-1 cascade fired into +13σ..+21σ; ~10 blocked it). Only used when the gate is enabled.</summary>
+    public double MaxTriggerFlowZ { get; set; } = 10.0;
+
+    /// <summary>Option A: which F8 flow window (seconds) the z-score is read from. Must be a
+    /// configured Features:FlowWindowsSeconds value.</summary>
+    public int FlowClimaxWindowSeconds { get; set; } = 10;
+
+    /// <summary>Option B — deceleration gate. When true, the trigger requires the most recently
+    /// completed with-the-move delta bucket to have dropped by ≥ <see cref="ExhaustionDropRatio"/>
+    /// from the peak of the trailing <see cref="ExhaustionLookbackBuckets"/> buckets (Setup 1 A6
+    /// analogue). OFF by default.</summary>
+    public bool FlowDecelGateEnabled { get; set; } = false;
+
+    /// <summary>Option B: required fractional drop of the last completed with-move bucket below the
+    /// trailing peak (0.70 = "dropped ≥ 70% from peak", mirroring Setup 1 A6).</summary>
+    public double ExhaustionDropRatio { get; set; } = 0.70;
+
+    /// <summary>Option B: width of the with-the-move delta buckets (seconds).</summary>
+    public int ExhaustionBucketSeconds { get; set; } = 10;
+
+    /// <summary>Option B: how many trailing completed buckets define the "peak" the last bucket is
+    /// compared against.</summary>
+    public int ExhaustionLookbackBuckets { get; set; } = 6;
+
     // ----- invalidation / context lifetime -----
 
     /// <summary>Invalidation bucket width (the rulebook's 10-second bucket).</summary>

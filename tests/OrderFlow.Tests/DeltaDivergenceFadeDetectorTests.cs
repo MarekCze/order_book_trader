@@ -285,6 +285,56 @@ public class DeltaDivergenceFadeDetectorTests
         Assert.Equal(0, c.Evaluated("E4"));
     }
 
+    // ----- flow-exhaustion gates (opt-in; off by default → the scenarios above are byte-identical) -----
+
+    [Fact]
+    public void FlowClimaxGate_Blocks_WhenWithMoveFlowStillExtreme()
+    {
+        // MaxTriggerFlowZ below any realizable z → the gate blocks every fade while flow exists.
+        var h = new Harness(opts: new Setup5Options { FlowClimaxGateEnabled = true, MaxTriggerFlowZ = -1000 });
+        h.Arm();
+        Assert.NotEqual(SetupState.OrderWorking, h.Detector.State); // gate refused the fade — no order working
+        Assert.Empty(h.Journal.Candidates);
+        Assert.True(h.Detector.Conditions.Evaluated("Eflow") >= 1);
+        Assert.Equal(0, h.Detector.Conditions.Passed("Eflow"));
+    }
+
+    [Fact]
+    public void FlowClimaxGate_Passes_WhenThresholdAboveFlow()
+    {
+        var h = new Harness(opts: new Setup5Options { FlowClimaxGateEnabled = true, MaxTriggerFlowZ = 1_000_000 });
+        h.Arm();
+        Assert.Equal(SetupState.OrderWorking, h.Detector.State);
+        Assert.Single(h.Journal.Candidates);
+    }
+
+    [Fact]
+    public void DecelGate_Passes_WhenLastBucketWellBelowPeak()
+    {
+        // Run-up peaks at a +200 with-move bucket (t0–2), the bucket printing the new high is +10
+        // → a 95% drop, well past the 70% requirement.
+        var h = new Harness(opts: new Setup5Options
+        {
+            FlowDecelGateEnabled = true, ExhaustionLookbackBuckets = 100, ExhaustionDropRatio = 0.70,
+        });
+        h.Arm();
+        Assert.Equal(SetupState.OrderWorking, h.Detector.State);
+        Assert.Single(h.Journal.Candidates);
+    }
+
+    [Fact]
+    public void DecelGate_Blocks_WhenFlowHasNotDeceleratedEnough()
+    {
+        // Same +200 → +10 path, but demanding a 99% drop (last ≤ 2) → +10 fails → blocked.
+        var h = new Harness(opts: new Setup5Options
+        {
+            FlowDecelGateEnabled = true, ExhaustionLookbackBuckets = 100, ExhaustionDropRatio = 0.99,
+        });
+        h.Arm();
+        Assert.NotEqual(SetupState.OrderWorking, h.Detector.State);
+        Assert.Empty(h.Journal.Candidates);
+    }
+
     [Fact]
     public void LongMirror_ArmsWithBuyLimitInsideTheLow()
     {

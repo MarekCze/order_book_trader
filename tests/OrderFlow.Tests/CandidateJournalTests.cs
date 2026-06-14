@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using OrderFlow.Backtest;
 using OrderFlow.Domain.Book;
 using OrderFlow.Domain.Features;
 using OrderFlow.Domain.Primitives;
@@ -112,6 +113,26 @@ public class CandidateJournalTests : IDisposable
         Assert.Equal(Price.FromDecimal(4999.00m).RawNano, fills.GetInt64(1));
         Assert.Equal(10, fills.GetInt64(2));
         Assert.False(fills.Read());
+    }
+
+    [Fact]
+    public void TradeSummary_DoesNotThrow_WhenAGroupIsAllUnresolvedCandidates()
+    {
+        // An emitted candidate left unresolved at data-end has disposition NULL. A setup/direction
+        // group containing only such rows makes SQLite's SUM(disposition='Expired') return NULL —
+        // the summary printer must treat that as 0, not crash on GetInt64.
+        using (var journal = new SqliteCandidateJournal(DbPath, new FeatureEngineOptions()))
+        {
+            journal.RecordCandidate(MakeCandidate()); // block None, no outcome → disposition NULL
+        }
+
+        var sw = new StringWriter();
+        TradeSummaryPrinter.Print(sw, DbPath);
+        string output = sw.ToString();
+
+        Assert.Contains("1 candidates", output);
+        Assert.Contains("0 expired", output);
+        Assert.Contains("0 traded", output);
     }
 
     [Fact]

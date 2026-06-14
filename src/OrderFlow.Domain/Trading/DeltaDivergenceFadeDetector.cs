@@ -49,15 +49,25 @@ public sealed class DeltaDivergenceFadeDetector : SetupDetectorBase
     private long _bucketIndex = long.MinValue;
     private long _bucketAdverseDelta;
 
+    // Option B — ambient with-the-move flow buckets on a fixed absolute grid, tracked across
+    // context churn (NOT cleared in OnReset). Only maintained when the decel gate is enabled.
+    private readonly long[] _exhRing;
+    private long _exhBucketIndex = long.MinValue;
+    private long _exhCurDelta;
+    private long? _exhLastCompleted;
+    private int _exhRingPos;
+    private int _exhRingCount;
+
     private long _contextEntered;
     private long _candidates;
 
-    private const int E1 = 0, E2 = 1, E3 = 2, E4 = 3;
+    private const int E1 = 0, E2 = 1, E3 = 2, E4 = 3, Eflow = 4, Edecel = 5;
 
     /// <summary>Per-condition funnel telemetry (diagnostic only). E1's evaluated count is
     /// the number of fresh new-30-min-extreme samples seen while Idle; E4's is the events
-    /// spent waiting in ContextMet.</summary>
-    public ConditionFunnel Conditions { get; } = new("E1", "E2", "E3", "E4");
+    /// spent waiting in ContextMet. Eflow/Edecel are the opt-in flow-exhaustion gates (always
+    /// pass when disabled).</summary>
+    public ConditionFunnel Conditions { get; } = new("E1", "E2", "E3", "E4", "Eflow", "Edecel");
 
     public override string? FunnelLine() =>
         $"context {_contextEntered:N0} → candidates {_candidates:N0} | {Conditions.Summary()}";
@@ -75,6 +85,7 @@ public sealed class DeltaDivergenceFadeDetector : SetupDetectorBase
         : base(SetupId.DeltaDivergenceFade, direction, tick, risk, exec, journal, execOptions, riskOptions, nextCandidateId)
     {
         _o = options;
+        _exhRing = new long[Math.Max(1, _o.ExhaustionLookbackBuckets)];
     }
 
     private Side EntrySide => ExecBuySide;
@@ -90,6 +101,7 @@ public sealed class DeltaDivergenceFadeDetector : SetupDetectorBase
         if (e.Kind == MarketEventKind.Trade)
         {
             _lastTradePrice = e.Price;
+            AccumulateWithMoveBucket(in e);
         }
 
         switch (State)
@@ -215,6 +227,17 @@ public sealed class DeltaDivergenceFadeDetector : SetupDetectorBase
             return;
         }
 
+        // Flow-exhaustion gates (opt-in; both pass-through when disabled). Refuse to fade while
+        // the move is still being pushed — diagnosed as S5's dominant failure (continuation).
+        if (!Conditions.Check(Eflow, Setup5Guards.FlowNotClimaxing(WithMoveFlowZ(features), _o)))
+        {
+            return;
+        }
+        if (!Conditions.Check(Edecel, Setup5Guards.FlowDecelerated(ExhPeak(), _exhLastCompleted, _o)))
+        {
+            return;
+        }
+
         // Candidate: global filters keyed on the extreme's location + journal.
         _candidates++;
         long stopDistanceTicks = _o.EntryOffsetTicks + _o.StopOffsetTicks;
@@ -281,6 +304,78 @@ public sealed class DeltaDivergenceFadeDetector : SetupDetectorBase
             _bucketAdverseDelta += -ExecSign * signedSize; // adverse = against the (possibly inverted) position
         }
         return Setup5Guards.Invalidation_RealAggressors(_bucketAdverseDelta, _o);
+    }
+
+    // ----- flow-exhaustion gate inputs (Option A / Option B) -----
+
+    /// <summary>Option A: the with-the-move aggressor flow z-score at trigger — positive when the
+    /// push that drove the extreme (buys for a short, sells for a long) is still aggressive.
+    /// Null (gate passes) when the gate is off or the session delta distribution isn't ready.</summary>
+    private double? WithMoveFlowZ(FeatureEngine features)
+    {
+        if (!_o.FlowClimaxGateEnabled)
+        {
+            return null;
+        }
+        int widx = features.FlowWindowIndex(_o.FlowClimaxWindowSeconds);
+        return features.DeltaZScore(widx, features.WindowDelta(widx)) is { } z ? -Sign * z : null;
+    }
+
+    /// <summary>Option B: peak with-the-move delta over the trailing completed buckets (≤ 0 means
+    /// no real push yet → the decel guard passes through).</summary>
+    private long ExhPeak()
+    {
+        long peak = 0;
+        for (int i = 0; i < _exhRingCount; i++)
+        {
+            if (_exhRing[i] > peak)
+            {
+                peak = _exhRing[i];
+            }
+        }
+        return peak;
+    }
+
+    /// <summary>Accumulates with-the-move aggressor delta into fixed absolute-grid buckets so the
+    /// decel gate can compare the last completed bucket against the trailing peak. Empty buckets in
+    /// a gap are recorded as zeros (silence = exhausted; a session-long gap fills the ring with
+    /// zeros → pass-through). Only maintained when the decel gate is enabled (byte-identical off).</summary>
+    private void AccumulateWithMoveBucket(in MarketEvent e)
+    {
+        if (!_o.FlowDecelGateEnabled || e.Side == Side.None)
+        {
+            return;
+        }
+        long bucketNanos = _o.ExhaustionBucketSeconds * 1_000_000_000L;
+        long idx = (long)(e.TsEvent.UnixNanos / (ulong)bucketNanos);
+        if (_exhBucketIndex == long.MinValue)
+        {
+            _exhBucketIndex = idx;
+        }
+        if (idx != _exhBucketIndex)
+        {
+            PushCompletedBucket(_exhCurDelta);
+            long gap = idx - _exhBucketIndex;
+            for (long g = 1; g < gap && g <= _exhRing.Length; g++)
+            {
+                PushCompletedBucket(0); // empty intervening buckets age the trailing window
+            }
+            _exhBucketIndex = idx;
+            _exhCurDelta = 0;
+        }
+        long signedSize = e.Side == Side.Bid ? e.Size : -(long)e.Size;
+        _exhCurDelta += -Sign * signedSize; // with-the-move: +buys for a short, +sells for a long
+    }
+
+    private void PushCompletedBucket(long delta)
+    {
+        _exhLastCompleted = delta;
+        _exhRing[_exhRingPos] = delta;
+        _exhRingPos = (_exhRingPos + 1) % _exhRing.Length;
+        if (_exhRingCount < _exhRing.Length)
+        {
+            _exhRingCount++;
+        }
     }
 
     private void ExitAtMarket(ExitReason reason)

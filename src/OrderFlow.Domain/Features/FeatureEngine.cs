@@ -186,6 +186,12 @@ public sealed class FeatureEngine
     public double? DeltaPercentileRank(int windowIndex, long delta) =>
         _deltaDist[windowIndex].PercentileRank(delta);
 
+    /// <summary>F8 z: windowed delta's z-score against the session delta distribution (Setup 5
+    /// flow-climax gate); null until the distribution can produce one. Same source the snapshot
+    /// journals as f8_delta_z_w*.</summary>
+    public double? DeltaZScore(int windowIndex, long delta) =>
+        _deltaDist[windowIndex].ZScore(delta);
+
     /// <summary>F6 source: nearest LOI to a price (A1/B1/C2/D1/E3, global filter 2).</summary>
     public bool TryGetNearestLoi(Price price, out LoiReference loi) =>
         _loi.TryGetNearest(price, _tick, out loi);

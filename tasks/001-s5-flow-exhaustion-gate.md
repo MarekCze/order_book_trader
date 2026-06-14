@@ -1,6 +1,9 @@
 # Task 001 — Add a flow-exhaustion / stall gate to the Setup 5 trigger
 
-**Status:** Proposed — **DESIGN DISCUSSION REQUIRED before implementation.**
+**Status:** ✅ IMPLEMENTED (both gates, off by default) — 2026-06-14. First results in
+`runs/s5-flow-gate-results.md`. **Remaining: threshold calibration sweep before any default
+change.** Decisions taken: both gates, independently toggleable, off by default (byte-identical
+baseline). Week result: both gates → −70% loss, hit rate 31%→50% (n tiny, placeholders).
 **Type:** Detector definition change (not a threshold tweak).
 **Source:** `runs/entry-quality-diagnosis.md` (2026-06-14 entry-quality forensic).
 

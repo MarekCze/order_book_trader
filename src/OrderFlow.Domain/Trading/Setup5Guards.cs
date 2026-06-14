@@ -34,4 +34,20 @@ public static class Setup5Guards
     /// aggressor delta the adverse way beyond the prior swing extreme — real participants showed up.</summary>
     public static bool Invalidation_RealAggressors(long adverseBucketDelta, Setup5Options o) =>
         adverseBucketDelta >= o.InvalidationDeltaContracts;
+
+    /// <summary>Option A (opt-in): pass unless the with-the-move aggressor flow z-score is still
+    /// extreme. Pass-through when the gate is disabled or the z-score is unavailable.</summary>
+    public static bool FlowNotClimaxing(double? withMoveFlowZ, Setup5Options o) =>
+        !o.FlowClimaxGateEnabled
+        || withMoveFlowZ is not { } z
+        || z < o.MaxTriggerFlowZ;
+
+    /// <summary>Option B (opt-in): pass only when the last completed with-the-move delta bucket has
+    /// dropped by ≥ ExhaustionDropRatio below the trailing peak. Pass-through when disabled or the
+    /// bucket history is insufficient (peak ≤ 0, or no completed bucket).</summary>
+    public static bool FlowDecelerated(long peakWithMoveDelta, long? lastWithMoveDelta, Setup5Options o) =>
+        !o.FlowDecelGateEnabled
+        || peakWithMoveDelta <= 0
+        || lastWithMoveDelta is not { } last
+        || last <= (long)((1.0 - o.ExhaustionDropRatio) * peakWithMoveDelta);
 }

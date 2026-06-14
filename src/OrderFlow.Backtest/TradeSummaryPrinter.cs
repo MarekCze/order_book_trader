@@ -9,7 +9,7 @@ namespace OrderFlow.Backtest;
 /// M6 report (expectancy, MAE/MFE distributions, equity curve, markdown + CSVs) is produced
 /// by <see cref="ReportCommand"/> / <c>orderflow report</c> and the replay --report flag.
 /// </summary>
-internal static class TradeSummaryPrinter
+public static class TradeSummaryPrinter
 {
     public static void Print(TextWriter w, string journalPath)
     {
@@ -27,11 +27,11 @@ internal static class TradeSummaryPrinter
                 """
                 SELECT setup, direction,
                        COUNT(*) AS candidates,
-                       SUM(block != 'None') AS blocked,
-                       SUM(disposition = 'Expired') AS expired,
-                       SUM(disposition = 'CancelledInvalidated') AS cancelled,
-                       SUM(disposition = 'Traded') AS traded,
-                       SUM(disposition = 'Traded' AND net_pnl > 0) AS wins,
+                       COALESCE(SUM(block != 'None'), 0) AS blocked,
+                       COALESCE(SUM(disposition = 'Expired'), 0) AS expired,
+                       COALESCE(SUM(disposition = 'CancelledInvalidated'), 0) AS cancelled,
+                       COALESCE(SUM(disposition = 'Traded'), 0) AS traded,
+                       COALESCE(SUM(disposition = 'Traded' AND net_pnl > 0), 0) AS wins,
                        COALESCE(SUM(CASE WHEN disposition = 'Traded' THEN net_pnl END), 0) AS net
                 FROM candidates GROUP BY setup, direction ORDER BY setup, direction
                 """;

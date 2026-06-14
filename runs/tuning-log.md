@@ -311,3 +311,31 @@ all 16 + SQL fact table. Diagnostics-only; no defaults/thresholds/code changed.
 stall gate to the S5 trigger (e.g. block while `|f8_delta_z_w10|` extreme, or require last
 delta bucket to roll over from peak). Secondary: require E4's `reclaimed-past-H1`; add a
 re-arm cooldown to kill cascades. No defaults changed.
+
+---
+
+## S5 flow-exhaustion gates — implemented + first results (2026-06-14) — full results in `runs/s5-flow-gate-results.md`
+
+Implemented the top hypothesis above as **two opt-in gates (off by default, byte-identical
+baseline, TDD, 318 tests green)**: Option A `Setup5:FlowClimaxGateEnabled` (block while with-move
+F8 z ≥ `MaxTriggerFlowZ`) and Option B `Setup5:FlowDecelGateEnabled` (last with-move delta bucket
+dropped ≥ `ExhaustionDropRatio` below trailing peak — a Setup 1 A6 analogue). Guards in
+`Setup5Guards`, wired in `TryTrigger` after E4 with funnel cols `Eflow`/`Edecel`; z via new
+`FeatureEngine.DeltaZScore`. Also fixed a **pre-existing** `TradeSummaryPrinter` crash (NULL
+`SUM` on an all-unresolved group → `GetInt64`; COALESCE'd, regression-tested).
+
+**Week results (defaults except the gate flags):**
+
+| Config | Trades | Wins | Hit | Net | Δ |
+|---|---:|---:|---:|---:|---:|
+| Baseline (off) | 16 | 5 | 31% | −$6,161.50 | — (byte-identical) |
+| Flow-Z A (z≥10) | 12 | 4 | 33% | −$4,418.00 | +$1,743.50 (−28%) |
+| Decel B (drop≥0.70) | 12 | 5 | 42% | −$3,605.50 | +$2,556.00 (−42%) |
+| **Both** | **8** | **4** | **50%** | **−$1,862.00** | **+$4,299.50 (−70%)** |
+
+**Findings:** every gate improves entry quality as predicted; **B is the stronger single gate**
+(cut 4 losers, kept all 5 winners); **both together cut the loss 70%, hit rate 31%→50%**. Still
+net-negative (n tiny, ≈+0.5R win cap + costs) — gates fix the diagnosed *entry-quality* ceiling;
+stacking P2 exits is the separate next lever. **Caveats:** n=8–12, thresholds are uncalibrated
+placeholders, gates off by default — a proper threshold sweep is the next step before any default
+change.
