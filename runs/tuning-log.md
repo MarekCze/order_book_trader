@@ -217,3 +217,27 @@ machine arms/trades it spends fewer events in the A3 stall — a second-order ef
 **Item 4 verdict:** S4 silence is a (steep) threshold-calibration issue with a firing
 boundary at ~×0.7; S1 silence is structural (metric/definition), not a threshold. No
 defaults changed — diagnostics only, per the iteration's "diagnostics before optimization".
+
+---
+
+## Permissive "many entrances" run (2026-06-14) — full results in `runs/permissive-run-results.md`
+
+**Command:** `runs/permissive_run.sh` (binding-wall conditions opened to sweep firing levels,
+filter-5 caps lifted, all via `--set`; context conditions + global filters 1–4/6 default).
+
+**Config delta vs defaults:** S1 `StallVolumeMultiple=0.5,ReplenishRatioMin=0.5,RefreshCountMin=1,
+ExhaustionDropRatio=0.3`; S2 `ClimaxVolumePercentile=0.3,ClimaxShareBeyondLevel=0.3,
+SupplyDepthIncrease=0.1,StackedImbalanceMinLen=2`; S4 `DepthDeclineFraction=0.24,PullRatioMin=0.9,
+MinAlignedDeltaContracts=0`; `Risk:MaxAttemptsPerLoi=1000,ConsecutiveStopOutsToKillLevel=1000`.
+
+**Headline:** 70,133 candidates (vs 94 default) → only **48 trades** (vs 16). **66,494 (95%)
+blocked PositionOpen.** Net −$23,285.70, hit rate 8.3%, PF 0.05, 47/48 exits Stop.
+
+**Findings:** (1) The trade-frequency ceiling is the **hard-coded one-position-at-a-time rule**,
+not the setups — loosening thresholds 750×'d candidates but only 3×'d trades. "Many entrances"
+is architecturally gated (needs a portfolio-model code change), not threshold-gated. (2)
+Loosening signal thresholds **destroys entry quality** (hit rate 31%→8%, PF 0.12→0.05) — the
+strict rulebook thresholds are quality filters, not just throttles. (3) S1 still trades 0 even
+with A4 open (A5/A6 block) — reconfirms S1 is structural. S4 dominates (30/48; flood + detector
+order). **Process note:** a maximally-open profile (D2/D3 always-pass) was degenerate
+(candidate-per-event, 68 MB/day, killed) → moderated to sweep firing levels. No defaults changed.
