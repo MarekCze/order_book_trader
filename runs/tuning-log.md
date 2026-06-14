@@ -339,3 +339,26 @@ net-negative (n tiny, ≈+0.5R win cap + costs) — gates fix the diagnosed *ent
 stacking P2 exits is the separate next lever. **Caveats:** n=8–12, thresholds are uncalibrated
 placeholders, gates off by default — a proper threshold sweep is the next step before any default
 change.
+
+---
+
+## Gated S5 + P2 exit + TP-target sweep (2026-06-14) — full results in `runs/tp-target-sweep-results.md`
+
+Stacked the two opt-in gates with **P2 exit** (`T1ExitFraction=1.0`, full exit at one target),
+then swept the target distance `T1RMultiple` (config-only, ephemeral state; overfitting accepted
+per user — goal is the response surface, n=7–10/week).
+
+**Gates × P2 matrix:** baseline+P2 −$4,599 (16t/31%) · flowA+P2 −$3,168 (12t/33%) · decelB+P2
+−$2,043 (12t/42%) · **both+P2 −$612 (8t/50%)**. (avg win $486 = full 1R vs $173.5 scale-out;
+avg loss −$639.)
+
+**TP-target sweep (both gates + full exit):** clean single peak at the winners' MFE cluster.
+0.5R −$2,015 → 1.0R −$612 → 1.25R −$112 → **1.5R (~6t) +$388 (first net-positive ever)** →
+cliff at 1.75R −$1,473 (targets stop filling, hit 50%→29%). On the rising limb the same 4
+winners hit target (flat Tgt=4); avg win $236→$736. **The 1.5R optimum matches the diagnosis's
+winner MFEs {5,7,8,8,12}** — target and entry agree on where the move ends.
+
+**Takeaway:** entry gates (cut continuation losers) + full exit at ~1.5R (bank at winner MFE)
+turns the week −$6,161.50 → **+$388**. Proof the setup *can* clear costs when entries and target
+align. **Heavily overfit (n tiny, 5 days)** — needs out-of-sample days before trusting; gate
+thresholds still placeholders (their sweep is next). No defaults changed.
