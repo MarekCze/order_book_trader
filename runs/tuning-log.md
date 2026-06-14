@@ -362,3 +362,25 @@ winner MFEs {5,7,8,8,12}** — target and entry agree on where the move ends.
 turns the week −$6,161.50 → **+$388**. Proof the setup *can* clear costs when entries and target
 align. **Heavily overfit (n tiny, 5 days)** — needs out-of-sample days before trusting; gate
 thresholds still placeholders (their sweep is next). No defaults changed.
+
+---
+
+## S4 (LVN vacuum) overhaul — Part 1 diagnostic → SHELVED (2026-06-14) — full results in `runs/s4-d2-sweep-results.md`
+
+Started the S4 overhaul (`tasks/revive-other-setups/003`). Diagnostic-only, config-only, S4
+isolated (S1/S2/S5 off so S4 gets the one-position slot). 2-D D2 sweep (`DepthDeclineFraction` ×
+`PullRatioMin`) + D3 probe (`MinAlignedDeltaContracts`). Scripts `runs/s4_d2_sweep.sh`,
+`runs/s4_d3_probe.sh`.
+
+**Findings:** (1) **`PullRatioMin` is the sole binding gate** — PRM ≥ 1.0 → 0 candidates at every
+DDF (0.34→0.22); only PRM=0.8 opens D2; DDF is inert. (2) **Where it fires, entries are
+negative-edge:** hit 5.7–8.1%, **avg MFE 3.5–4.5t < avg MAE 4.9t**, net −$15k to −$23k over
+37–53 trades/cell — the LVN-vacuum thesis doesn't hold on this ES data (price reverts through the
+LVN). (3) **D3 tightening doesn't rescue it:** MFE stays < MAE at every usable setting (hit only
+nudges 6%→11% at MAD 400, still −$6.7k); past that it stops firing (MAD 800 → 4 trades/0 wins;
+MAD 1500 → n=1).
+
+**Verdict: SHELVE S4 like S1** — the signal itself lacks edge on this MBP-10 ES sample; a quality
+filter has no profitable sub-population to target, so the filter code was NOT built. Leave dormant
+(defaults fire 0). Robust within this 5-day sample but not a universal law — revisit with more
+data / MNQ / a different detection basis. Next in the revive order: **S2**.

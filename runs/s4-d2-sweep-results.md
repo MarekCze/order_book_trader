@@ -43,10 +43,45 @@ S4 **isolated** (S1/S2/S5 disabled) so it isn't starved of the one-position slot
    MFE above MAE, **S4 should be shelved like S1** (documented not-viable on MBP-10 ES), not
    force-calibrated.
 
+## D3 probe — does stronger confirming flow rescue it? (`runs/s4_d3_probe.sh`)
+
+D2 fixed at DDF 0.30 / PRM 0.8 (a firing point); swept D3 `MinAlignedDeltaContracts` (require
+this much aligned aggressor delta at the trigger).
+
+| MinAlignedDelta | cand | trades | hit | MFE / MAE | net |
+|---|---|---|---|---|---|
+| 100 (default) | 2,166 | 48 | 6.2% | 4.5 / 4.9 | −$21,103 |
+| 200 | 1,494 | 38 | 5.3% | 4.0 / 4.9 | −$17,344 |
+| 400 | 1,235 | 18 | 11.1% | 4.4 / 4.8 | −$6,676 |
+| 800 | 7 | 4 | 0.0% | 3.8 / 5.0 | −$2,134 |
+| 1500 | 1 | 1 | — | 14.0 / 5.0 | −$533 |
+
+**Tightening D3 does not rescue S4.** MFE stays below MAE at every usable setting; hit rate only
+nudges (6%→11% at MAD 400) while still bleeding (−$6.7k). Past that the setup essentially stops
+firing — MAD 800 → 7 candidates / 4 trades / 0 wins; MAD 1500 → a single trade (its MFE>MAE is
+**n=1 noise**, not signal). There is no setting that both fires and shows positive edge.
+
+## Verdict: SHELVE S4 (like S1) — not viable on this MBP-10 ES data
+
+The LVN-vacuum *signal itself* is negative-edge here (MFE < MAE across the entire firing region),
+and the candidate quality filter (D3) has no profitable sub-population to filter toward. Unlike S5
+— where real winners existed and just needed protecting — S4 has nothing to build on. **Recommend:
+do not build the quality-filter code; leave S4 effectively dormant** (rulebook defaults already
+fire 0), and document it. Revisit only with much more data, or with a different detection basis,
+if ever.
+
+- **Untested lever, deliberately not pursued:** location tightening (`LvnProximityTicks`,
+  `HvnRoomTicks`). With MFE < MAE the *direction* of the entry is wrong (price reverts through the
+  LVN), and location tightening doesn't fix a wrong-direction signal — not worth the spend on this
+  sample.
+
 ## Caveats
 
-- 5 days, one regime; D3 at default. The pessimistic fill model bites S4 hardest (stop entry pays
-  the spread + 1 tick), which is *intended* but compounds the poor raw edge.
+- 5 days, one regime. The finding is robust *within* this sample (37–53 trades/cell, consistent
+  ~6% hit), but "S4 has no edge" is a statement about these 5 ES days, not a universal law — more
+  data (or MNQ) could differ. The recommendation is "shelve now," not "S4 is permanently dead."
+- The pessimistic fill model bites S4 hardest (stop entry pays the spread + 1 tick) — intended,
+  but it compounds the poor raw edge.
 - `PullRatioMin` rests on F16, a documented MBP-10 approximation (traded-vs-cancelled heuristic) —
   its noisiness is a plausible contributor to why the depth-pull signal doesn't separate real
   vacuums from reversion.

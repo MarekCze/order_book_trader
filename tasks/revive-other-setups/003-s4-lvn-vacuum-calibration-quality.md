@@ -1,9 +1,14 @@
 # Task — Setup 4 (LVN vacuum): D2 fine-grid calibration + a quality filter
 
-**Status:** Proposed — calibration **plus** a new quality filter. **DESIGN DISCUSSION REQUIRED.**
-**Type:** Threshold calibration + quality-gate design. (Recommended to do first of the three —
-clearest path to a second tradeable setup.)
-**Source:** `runs/tuning-log.md` (item 4 sweep), `runs/permissive-run-results.md`.
+**Status:** ⛔ INVESTIGATED → SHELVED (2026-06-14). Part 1 diagnostic done
+(`runs/s4-d2-sweep-results.md`): S4's LVN-vacuum entries are **negative-edge** on the 5-day ES
+sample (hit ~6%, avg MFE < avg MAE across the entire firing region; D3 tightening doesn't rescue
+it). No quality-filter sub-population to build toward — **the quality-filter code was NOT built.**
+Like S1, documented not-viable on this MBP-10 ES data; leave dormant (rulebook defaults fire 0).
+Revisit only with much more data or a different detection basis. **Parts 1–3 below are the
+original plan, retained for that future revisit.**
+**Type:** Threshold calibration + quality-gate design.
+**Source:** `runs/tuning-log.md`, `runs/permissive-run-results.md`, `runs/s4-d2-sweep-results.md`.
 
 ## Why / where it dies
 
