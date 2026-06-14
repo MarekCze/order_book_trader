@@ -241,3 +241,27 @@ strict rulebook thresholds are quality filters, not just throttles. (3) S1 still
 with A4 open (A5/A6 block) — reconfirms S1 is structural. S4 dominates (30/48; flood + detector
 order). **Process note:** a maximally-open profile (D2/D3 always-pass) was degenerate
 (candidate-per-event, 68 MB/day, killed) → moderated to sweep firing levels. No defaults changed.
+
+---
+
+## Exit-geometry sweep (2026-06-14) — full results in `runs/exit-geometry-results.md`
+
+**Command:** `runs/exit_geometry_sweep.sh` (config-only; default entry config; exit knobs on
+S1/S2/S5 via `--set`; no defaults changed). Tests the diagnosis that wins are capped at +0.5R
+because T1-50%-then-breakeven + unreachable-3R-T2 → the runner contributes 0.
+
+| Profile | Net | Expectancy | Avg win | Targets |
+|---|---:|---:|---:|---:|
+| P0 baseline (1R/0.5/3R) | −$6,161 | −$385 | $173.5 | 0 |
+| **P2 single @1R (frac=1.0)** | **−$4,599** | **−$287** | **$486** | 5 |
+| P4 lock-runner (T2 1.5R, BE −1) | −$5,099 | −$319 | $386 | 2 |
+| P1 early-T1 / P3 tiny-T1 | worse (−$9.4k / −$8.8k) | | | |
+
+**Findings:** (1) Taking the **full position at the 1R target** (P2) beats the
+scale-out-then-breakeven baseline — same 16 trades/5 winners, but each banks the full 1R →
+avg win ×2.8 ($173.5→$486), expectancy +~25% (−$385→−$287), lowest maxDD; payoff 0.27→0.76.
+The runner gave up nothing (T2 never reached). (2) Still **net-negative**: P2's 0.76 payoff
+needs ~57% hit rate; actual 31% → **entry quality is the binding ceiling, not exits.**
+(3) **Trailing-stop (planned Stage 2 code) is NOT worth building** — MFEs (6% reach 3R) mean a
+runner captures ~nothing beyond P2's flat 1R. Exit fix is achievable in config.
+**Recommendation:** adopt P2-style geometry (config); skip the code change; next lever = entries.
