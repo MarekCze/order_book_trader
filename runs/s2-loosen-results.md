@@ -57,8 +57,29 @@ sample, (b) test capturing the 8–12t MFE with full-exit / wider-target geometr
 the entry-fill/expiry (a limit entry, or longer validity, instead of the H−2 stop). The spread
 filter is a hard structural ceiling on S2 frequency regardless.
 
+## Stage 3 — exit-geometry test (`runs/s2_exit_test.sh`)
+
+Applying the S5 lesson: on the P3g sample (6 trades), full exit (`T1ExitFraction=1.0`), sweep the
+single-target distance `T1RMultiple`. R≈5t (entry H−2, stop sweep+1).
+
+| Target | trades | hit | net | avg MFE | exits |
+|---|---|---|---|---|---|
+| 1.0R | 6 | 33% | −$1,235 | 4.8t | Stop 4 / Tgt 2 |
+| 1.5R | 6 | 33% | −$710 | 6.3t | Stop 4 / Tgt 2 |
+| 2.0R | 6 | 33% | −$235 | 7.7t | Stop 4 / Tgt 2 |
+| **2.5R** | 6 | 33% | **+$290** | 9.2t | Stop 4 / Tgt 2 |
+
+**Same shape as S5:** the *same 2 winners* reach the target at every distance (Tgt:2 constant) and
+have large favorable runs (MFE ≥10t), so widening the target banks more on them — net climbs
+monotonically and crosses **positive at ~2.5R (+$290)**. Confirms the MFE>MAE finding: S2's winners
+travel far and the default T1-at-1R geometry under-captures them. (Note S2 winners run *further*
+than S5's — optimum ~2.5R vs S5's ~1.5R — consistent with stop-runs producing larger reversals.)
+
 ## Caveats
 
+- **n=6, only 2 winners, AND global filters relaxed (non-deployable)** — this is anecdotal-squared.
+  The +$290 is *not* a result to trust; the trustworthy part is the *direction* (MFE>MAE; winners
+  far enough that a wide target captures them), consistent across Stages 2–3.
 - n=3–6; global filters relaxed as a measurement device (not deployable). 5 days, one ES regime.
 - The +$79 / −$860 split across P2g/P3g is noise at this n — the **MFE>MAE signature**, not the
   net, is the signal worth carrying forward.
