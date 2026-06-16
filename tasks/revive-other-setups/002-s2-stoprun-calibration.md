@@ -1,9 +1,15 @@
 # Task — Setup 2 (Stop-run fade): B3 / B5 calibration review
 
-**Status:** Proposed — calibration + possible definition review. **DESIGN DISCUSSION REQUIRED
-before changing defaults.**
+**Status:** 🟡 INVESTIGATED → PROMISING, parked for more data (2026-06-14). Stage-1/2 diagnostics
+done (`runs/s2-loosen-results.md`): unlike S1/S4, **S2 entries show favorable directional edge
+(avg MFE 8–12t > avg MAE 5.3t)** — the stop-run thesis is *not* theory-weak. Silence is from three
+throttles: the over-specified B3/B5 conjunction, the 1-tick spread filter (S2 sweeps occur in
+wide-spread books — structural ceiling), and entry-stop **expiry** (price doesn't reclaim to H−2
+in time). Exit geometry under-captures the MFE (same as S5). **Rests on n=3–6 with global filters
+relaxed → suggestive, not established. Do NOT shelve; revisit with more data** + an exit-geometry
+pass + an entry-fill fix (limit entry / longer validity). Parts below retained for that work.
 **Type:** Threshold calibration with quality validation.
-**Source:** `runs/tuning-log.md` (funnel on real week), `runs/permissive-run-results.md`.
+**Source:** `runs/s2-loosen-results.md`, `runs/tuning-log.md`, `runs/permissive-run-results.md`.
 
 ## Why / where it dies
 

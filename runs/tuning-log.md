@@ -384,3 +384,23 @@ MAD 1500 → n=1).
 filter has no profitable sub-population to target, so the filter code was NOT built. Leave dormant
 (defaults fire 0). Robust within this 5-day sample but not a universal law — revisit with more
 data / MNQ / a different detection basis. Next in the revive order: **S2**.
+
+---
+
+## S2 (stop-run fade) loosening diagnostic (2026-06-14) — full results in `runs/s2-loosen-results.md`
+
+Tested "over-specified vs theory-weak" for S2 (`tasks/revive-other-setups/002`). Config-only, S2
+isolated. Stage 1 (`s2_loosen_sweep.sh`): loosening B3/B5 lifts candidates 1→6→46→232 but trades
+stay ~0 — ~95% of P3's 232 die at *global filters* (91 AttemptsExhausted, 80 Session, 50 Spread,
+6 Expired). Stage 2 (`s2_unblock_run.sh`): relaxed Session+Attempts (spread filter is exact
+1-tick, left at default = the only tradeable state) to force a sample.
+
+**Result — S2 is NOT theory-weak (contrast S4):** P2g 3t hit33% net+$79 **MFE 11.7/MAE 5.3**;
+P3g 6t hit33% net−$860 **MFE 8.2/MAE 5.3** → **MFE > MAE**, favorable directional edge. Silence
+comes from three throttles (over-specified B3/B5 conjunction; the 1-tick spread filter — S2 sweeps
+occur in wide-spread books, a structural ceiling; and entry-stop **expiry** — price doesn't
+reclaim to H−2 in time). Exit geometry under-captures the 8–12t MFE (same as S5).
+
+**Verdict: PROMISING, parked.** n=3–6 with global filters relaxed → suggestive not established.
+Don't shelve (unlike S1/S4). Revisit with more data + full-exit/wider-target geometry + an
+entry-fill fix (limit entry / longer validity). No defaults or code changed.
